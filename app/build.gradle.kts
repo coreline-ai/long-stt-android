@@ -116,4 +116,8 @@ dependencies {
     // 테스트
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+
+    // Galaxy S25 AICore 빠른 요약 사전 검증용. 정식 기능 전까지 테스트 APK에만 포함한다.
+    androidTestImplementation("com.google.mlkit:genai-summarization:1.0.0-beta1")
 }
