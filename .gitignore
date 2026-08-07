@@ -1,0 +1,31 @@
+# Android/Gradle
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+build/
+/captures
+.externalNativeBuild
+.cxx
+
+# 네이티브 라이브러리 (용량 큼, 빌드 산출물)
+app/libs/*.aar
+app/src/main/jniLibs/**/*.so
+
+# 모델 및 오디오 (대용량, 민감)
+*.bin
+*.ggml
+*.m4a
+*.mp3
+*.wav
+
+# 결과 파일
+results/
+*.csv
+stt_*.log
+/*_전사_전체.txt
+/*_전사텍스트.txt
+
+# 프로젝트에 포함하지 않는 로컬 중첩 저장소
+/STT 데모/

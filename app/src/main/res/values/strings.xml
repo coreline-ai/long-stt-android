@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">STT 벤치마크</string>
+    <string name="stt_notification_channel">장시간 STT 전사</string>
+    <string name="stt_notification_title">STT 전사 실행 중</string>
+</resources>
