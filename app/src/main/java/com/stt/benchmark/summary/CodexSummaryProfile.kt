@@ -31,4 +31,29 @@ object CodexSummaryProfile {
         )
         .put("stream", true)
         .toString()
+
+    /** Builds the only transcript-bearing request. Callers must obtain explicit user consent first. */
+    fun userApprovedSummaryRequest(transcript: String): String = JSONObject()
+        .put("model", PARITY_MODEL)
+        .put(
+            "messages",
+            JSONArray()
+                .put(
+                    JSONObject()
+                        .put("role", "system")
+                        .put(
+                            "content",
+                            "사용자가 명시적으로 선택한 전사를 한국어로 간결하게 요약하세요. " +
+                                "제목 1개와 핵심 요점 3~6개만 제공하고, 원문을 장문으로 반복하지 마세요. " +
+                                "도구 호출이나 외부 작업을 제안하지 마세요.",
+                        ),
+                )
+                .put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("content", "[선택된 전사 시작]\\n$transcript\\n[선택된 전사 끝]"),
+                ),
+        )
+        .put("stream", true)
+        .toString()
 }

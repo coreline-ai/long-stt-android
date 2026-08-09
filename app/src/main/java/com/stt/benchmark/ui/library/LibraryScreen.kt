@@ -19,7 +19,9 @@ import androidx.compose.material.icons.outlined.AudioFile
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -29,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -39,6 +42,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stt.benchmark.data.MediaLibraryStore
 import com.stt.benchmark.data.RecordingTranscriptionGroupStore
 import com.stt.benchmark.data.TranscriptionSessionStore
+import com.stt.benchmark.summary.CodexAuthPhase
+import com.stt.benchmark.summary.CodexAuthUiState
+import com.stt.benchmark.summary.CodexAuthViewModel
+import com.stt.benchmark.summary.SummaryRequestPolicy
+import com.stt.benchmark.summary.SummarySessionStore
+import com.stt.benchmark.summary.SummaryUiState
 import com.stt.benchmark.ui.SttViewModel
 import com.stt.benchmark.ui.common.ArchiveEmptyState
 import com.stt.benchmark.ui.common.ArchiveStatusTone
@@ -54,11 +63,14 @@ import java.util.Locale
 @Composable
 fun LibraryRoute(
     viewModel: SttViewModel,
+    codexAuthViewModel: CodexAuthViewModel,
     onOpenTranscription: () -> Unit,
     modifier: Modifier = Modifier,
     routeViewModel: LibraryRouteViewModel = viewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val auth by codexAuthViewModel.uiState.collectAsStateWithLifecycle()
+    val summaryState by codexAuthViewModel.summaryUiState.collectAsStateWithLifecycle()
     val routeState by routeViewModel.uiState.collectAsStateWithLifecycle()
     val selected = state.resultSessions.firstOrNull { it.sessionId == routeState.selectedSessionId }
     val deleteTarget = state.resultSessions.firstOrNull { it.sessionId == routeState.deleteSessionId }
@@ -67,6 +79,9 @@ fun LibraryRoute(
     val selectedAudio = state.audioLibrary.firstOrNull { it.path == routeState.selectedAudioPath }
     val deleteAudioTarget = state.audioLibrary.firstOrNull { it.path == routeState.deleteAudioPath }
     val standaloneResults = state.resultSessions.filter { it.recordingGroupId.isBlank() }
+    val consentCandidate = routeState.summaryConsentSource?.let { source ->
+        summaryCandidateFor(source, state.resultSessions, state.recordingGroups)
+    }
 
     LaunchedEffect(routeState, state.resultSessions, state.recordingGroups, state.audioLibrary) {
         if (routeState.selectedSessionId.isNotBlank() && selected == null) routeViewModel.dismissSession()
@@ -75,6 +90,7 @@ fun LibraryRoute(
         if (routeState.deleteGroupId.isNotBlank() && deleteGroupTarget == null) routeViewModel.dismissGroupDeletion()
         if (routeState.selectedAudioPath.isNotBlank() && selectedAudio == null) routeViewModel.dismissAudio()
         if (routeState.deleteAudioPath.isNotBlank() && deleteAudioTarget == null) routeViewModel.dismissAudioDeletion()
+        if (routeState.summaryConsentSource != null && consentCandidate == null) routeViewModel.dismissSummaryConsent()
     }
 
     LazyColumn(
@@ -179,6 +195,19 @@ fun LibraryRoute(
                             )
                         }
                     }
+                    SummaryResultSection(
+                        candidate = summaryCandidateFor(
+                            source = SummaryRequestPolicy.Source(
+                                SummarySessionStore.SourceType.RECORDING_GROUP,
+                                group.groupId,
+                            ),
+                            sessions = state.resultSessions,
+                            groups = state.recordingGroups,
+                        ),
+                        auth = auth,
+                        summaryState = summaryState,
+                        onRequest = routeViewModel::requestSummaryConsent,
+                    )
                 }
             },
             confirmButton = { TextButton(onClick = routeViewModel::dismissGroup) { Text("닫기") } },
@@ -281,6 +310,19 @@ fun LibraryRoute(
                         maxLines = 18,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    SummaryResultSection(
+                        candidate = summaryCandidateFor(
+                            source = SummaryRequestPolicy.Source(
+                                SummarySessionStore.SourceType.TRANSCRIPTION_SESSION,
+                                session.sessionId,
+                            ),
+                            sessions = state.resultSessions,
+                            groups = state.recordingGroups,
+                        ),
+                        auth = auth,
+                        summaryState = summaryState,
+                        onRequest = routeViewModel::requestSummaryConsent,
+                    )
                 }
             },
             confirmButton = { TextButton(onClick = routeViewModel::dismissSession) { Text("닫기") } },
@@ -312,6 +354,133 @@ fun LibraryRoute(
             dismissButton = { TextButton(onClick = routeViewModel::dismissSessionDeletion) { Text("취소") } },
         )
     }
+
+    consentCandidate?.let { candidate ->
+        SummaryConsentDialog(
+            onConfirm = {
+                routeViewModel.dismissSummaryConsent()
+                codexAuthViewModel.runUserApprovedSummary(candidate.source, candidate.transcript)
+            },
+            onDismiss = routeViewModel::dismissSummaryConsent,
+        )
+    }
+}
+
+internal data class SummaryCandidate(
+    val source: SummaryRequestPolicy.Source,
+    val transcript: String,
+)
+
+private fun summaryCandidateFor(
+    source: SummaryRequestPolicy.Source,
+    sessions: List<TranscriptionSessionStore.Checkpoint>,
+    groups: List<RecordingTranscriptionGroupStore.Group>,
+): SummaryCandidate? {
+    return when (source.type) {
+        SummarySessionStore.SourceType.TRANSCRIPTION_SESSION -> sessions
+            .firstOrNull { it.sessionId == source.id && it.status == TranscriptionSessionStore.Status.COMPLETED }
+            ?.toResult()
+            ?.text
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?.let { SummaryCandidate(source, it) }
+
+        SummarySessionStore.SourceType.RECORDING_GROUP -> {
+            val group = groups.firstOrNull {
+                it.groupId == source.id && it.status == RecordingTranscriptionGroupStore.GroupStatus.COMPLETED
+            } ?: return null
+            val sessionsById = sessions.associateBy(TranscriptionSessionStore.Checkpoint::sessionId)
+            val transcript = group.children.sortedBy { it.sequence }.mapNotNull { child ->
+                sessionsById[child.sttSessionId]
+                    ?.takeIf { it.status == TranscriptionSessionStore.Status.COMPLETED }
+                    ?.toResult()
+                    ?.text
+                    ?.trim()
+                    ?.takeIf(String::isNotBlank)
+            }.takeIf { it.size == group.children.size }?.joinToString("\n")?.trim()
+            transcript?.takeIf(String::isNotBlank)?.let { SummaryCandidate(source, it) }
+        }
+    }
+}
+
+@Composable
+internal fun SummaryResultSection(
+    candidate: SummaryCandidate?,
+    auth: CodexAuthUiState,
+    summaryState: SummaryUiState,
+    onRequest: (SummaryRequestPolicy.Source) -> Unit,
+) {
+    val source = candidate?.source
+    val entry = source?.let { candidateSource ->
+        summaryState.entries.firstOrNull { it.source == candidateSource }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        HorizontalDivider()
+        Text("외부 요약", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "전사는 기기에 보관됩니다. 이 결과를 선택하고 동의할 때만 Codex로 전송합니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        when {
+            entry != null -> {
+                StatusPill("요약 완료", tone = ArchiveStatusTone.COMPLETE)
+                Text(entry.summary, style = MaterialTheme.typography.bodyMedium, maxLines = 12)
+            }
+            source != null && summaryState.activeSourceKey == source.key -> {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text(summaryState.statusMessage, style = MaterialTheme.typography.bodyMedium)
+            }
+            candidate == null -> Text(
+                "내용이 있는 전체 완료 전사만 요약할 수 있습니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            auth.phase != CodexAuthPhase.AUTHENTICATED -> Text(
+                "설정에서 ChatGPT 연결을 완료하면 요약을 시작할 수 있습니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            summaryState.isRunning -> Text(
+                "다른 요약 작업이 진행 중입니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            else -> Button(
+                onClick = { onRequest(requireNotNull(source)) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .archiveTouchTarget()
+                    .semantics { contentDescription = "외부 요약 시작" },
+            ) { Text("외부 요약") }
+        }
+        if (entry == null && summaryState.statusMessage.isNotBlank() && !summaryState.isRunning) {
+            Text(
+                summaryState.statusMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+internal fun SummaryConsentDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("외부 요약을 시작할까요?") },
+        text = {
+            Text(
+                "선택한 완료 전사의 본문을 Codex 외부 서비스에 한 번 전송해 요약합니다. " +
+                    "전사 원문은 자동 전송되지 않으며, 취소하면 전송하지 않습니다.",
+            )
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("동의하고 요약") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
+    )
 }
 
 @Composable

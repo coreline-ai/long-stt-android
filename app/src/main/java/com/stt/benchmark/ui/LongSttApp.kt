@@ -200,6 +200,7 @@ fun LongSttApp(
                     LaunchedEffect(Unit) { sttViewModel.refreshLibraries() }
                     LibraryRoute(
                         viewModel = sttViewModel,
+                        codexAuthViewModel = codexAuthViewModel,
                         onOpenTranscription = {
                             navController.navigate(AppDestination.TRANSCRIPTION.route) {
                                 launchSingleTop = true

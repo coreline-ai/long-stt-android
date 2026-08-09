@@ -1,7 +1,10 @@
 package com.stt.benchmark.ui
 
 import androidx.lifecycle.SavedStateHandle
+import com.stt.benchmark.summary.SummaryRequestPolicy
+import com.stt.benchmark.summary.SummarySessionStore
 import com.stt.benchmark.ui.library.LibraryRouteViewModel
+import com.stt.benchmark.ui.library.summaryConsentSource
 import com.stt.benchmark.ui.settings.SettingsDialog
 import com.stt.benchmark.ui.settings.SettingsRouteViewModel
 import com.stt.benchmark.ui.transcription.TranscriptionDialog
@@ -41,6 +44,24 @@ class RouteStateViewModelTest {
         first.dismissSessionDeletion()
         assertTrue(first.uiState.value.selectedGroupId.isBlank())
         assertTrue(first.uiState.value.deleteSessionId.isBlank())
+    }
+
+    @Test
+    fun librarySummaryConsentRestoresOnlyOpaqueSourceKey() {
+        val handle = SavedStateHandle()
+        val first = LibraryRouteViewModel(handle)
+        val source = SummaryRequestPolicy.Source(
+            SummarySessionStore.SourceType.RECORDING_GROUP,
+            "recording_stt_123",
+        )
+
+        first.requestSummaryConsent(source)
+        val restored = LibraryRouteViewModel(handle).uiState.value
+
+        assertEquals(source, restored.summaryConsentSource)
+        first.dismissSummaryConsent()
+        assertTrue(first.uiState.value.summaryConsentSourceType.isBlank())
+        assertTrue(first.uiState.value.summaryConsentSourceId.isBlank())
     }
 
     @Test

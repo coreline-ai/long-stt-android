@@ -2,6 +2,8 @@ package com.stt.benchmark.ui.library
 
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
+import com.stt.benchmark.summary.SummaryRequestPolicy
+import com.stt.benchmark.summary.SummarySessionStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -13,7 +15,19 @@ data class LibraryRouteUiState(
     val deleteGroupId: String = "",
     val selectedAudioPath: String = "",
     val deleteAudioPath: String = "",
+    val summaryConsentSourceType: String = "",
+    val summaryConsentSourceId: String = "",
 )
+
+val LibraryRouteUiState.summaryConsentSource: SummaryRequestPolicy.Source?
+    get() = summaryConsentSourceType.takeIf(String::isNotBlank)?.let { type ->
+        runCatching {
+            SummaryRequestPolicy.Source(
+                type = SummarySessionStore.SourceType.valueOf(type),
+                id = summaryConsentSourceId,
+            )
+        }.getOrNull()
+    }
 
 /** 보관함의 선택·확인 dialog 상태만 저장한다. 원본/결과 삭제는 domain ViewModel에 위임한다. */
 class LibraryRouteViewModel(
@@ -28,6 +42,10 @@ class LibraryRouteViewModel(
     fun requestGroupDeletion(id: String) = update(selectedGroupId = "", deleteGroupId = id)
     fun selectAudio(path: String) = update(selectedAudioPath = path)
     fun requestAudioDeletion(path: String) = update(selectedAudioPath = "", deleteAudioPath = path)
+    fun requestSummaryConsent(source: SummaryRequestPolicy.Source) = update(
+        summaryConsentSourceType = source.type.name,
+        summaryConsentSourceId = source.id,
+    )
 
     fun dismissSession() = update(selectedSessionId = "")
     fun dismissSessionDeletion() = update(deleteSessionId = "")
@@ -35,6 +53,7 @@ class LibraryRouteViewModel(
     fun dismissGroupDeletion() = update(deleteGroupId = "")
     fun dismissAudio() = update(selectedAudioPath = "")
     fun dismissAudioDeletion() = update(deleteAudioPath = "")
+    fun dismissSummaryConsent() = update(summaryConsentSourceType = "", summaryConsentSourceId = "")
 
     private fun load() = LibraryRouteUiState(
         selectedSessionId = savedStateHandle.get<String>(SELECTED_SESSION).orEmpty(),
@@ -43,6 +62,8 @@ class LibraryRouteViewModel(
         deleteGroupId = savedStateHandle.get<String>(DELETE_GROUP).orEmpty(),
         selectedAudioPath = savedStateHandle.get<String>(SELECTED_AUDIO).orEmpty(),
         deleteAudioPath = savedStateHandle.get<String>(DELETE_AUDIO).orEmpty(),
+        summaryConsentSourceType = savedStateHandle.get<String>(SUMMARY_CONSENT_TYPE).orEmpty(),
+        summaryConsentSourceId = savedStateHandle.get<String>(SUMMARY_CONSENT_ID).orEmpty(),
     )
 
     private fun update(
@@ -52,6 +73,8 @@ class LibraryRouteViewModel(
         deleteGroupId: String = _uiState.value.deleteGroupId,
         selectedAudioPath: String = _uiState.value.selectedAudioPath,
         deleteAudioPath: String = _uiState.value.deleteAudioPath,
+        summaryConsentSourceType: String = _uiState.value.summaryConsentSourceType,
+        summaryConsentSourceId: String = _uiState.value.summaryConsentSourceId,
     ) {
         val next = LibraryRouteUiState(
             selectedSessionId,
@@ -60,6 +83,8 @@ class LibraryRouteViewModel(
             deleteGroupId,
             selectedAudioPath,
             deleteAudioPath,
+            summaryConsentSourceType,
+            summaryConsentSourceId,
         )
         _uiState.value = next
         savedStateHandle[SELECTED_SESSION] = next.selectedSessionId
@@ -68,6 +93,8 @@ class LibraryRouteViewModel(
         savedStateHandle[DELETE_GROUP] = next.deleteGroupId
         savedStateHandle[SELECTED_AUDIO] = next.selectedAudioPath
         savedStateHandle[DELETE_AUDIO] = next.deleteAudioPath
+        savedStateHandle[SUMMARY_CONSENT_TYPE] = next.summaryConsentSourceType
+        savedStateHandle[SUMMARY_CONSENT_ID] = next.summaryConsentSourceId
     }
 
     private companion object {
@@ -77,5 +104,7 @@ class LibraryRouteViewModel(
         const val DELETE_GROUP = "library.deleteGroup"
         const val SELECTED_AUDIO = "library.selectedAudio"
         const val DELETE_AUDIO = "library.deleteAudio"
+        const val SUMMARY_CONSENT_TYPE = "library.summaryConsentType"
+        const val SUMMARY_CONSENT_ID = "library.summaryConsentId"
     }
 }

@@ -4,11 +4,15 @@ import android.app.Activity
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.stt.benchmark.core.DeviceWorkCoordinator
+import com.stt.benchmark.core.DeviceWorkRuntime
 import dev.alpine.llm.OAuthAuthenticationState
 import dev.alpine.llm.OAuthException
 import dev.alpine.llm.OAuthFailureKind
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,14 +35,26 @@ data class CodexAuthUiState(
     val probeResponse: String? = null,
 )
 
+/** Summary output is separate from authentication state so a transcript never becomes auth state. */
+data class SummaryUiState(
+    val entries: List<SummarySessionStore.Entry> = emptyList(),
+    val activeSourceKey: String = "",
+    val isRunning: Boolean = false,
+    val statusMessage: String = "완료된 전사를 선택하면 외부 요약을 시작할 수 있습니다.",
+)
+
 class CodexAuthViewModel(application: Application) : AndroidViewModel(application) {
     private val controller = CodexSummaryAuthController(application)
+    private val summaryStore = SummarySessionStore(application)
     private val _uiState = MutableStateFlow(CodexAuthUiState())
     val uiState: StateFlow<CodexAuthUiState> = _uiState.asStateFlow()
+    private val _summaryUiState = MutableStateFlow(SummaryUiState())
+    val summaryUiState: StateFlow<SummaryUiState> = _summaryUiState.asStateFlow()
     private var activeJob: Job? = null
 
     init {
         refreshAuthenticationState()
+        refreshSummaryEntries()
     }
 
     fun refreshAuthenticationState() {
@@ -118,6 +134,94 @@ class CodexAuthViewModel(application: Application) : AndroidViewModel(applicatio
                 )
             }
         }.also { job -> job.invokeOnCompletion { if (activeJob === job) activeJob = null } }
+    }
+
+    /**
+     * Executes a single summary only after the UI has displayed and accepted its consent dialog.
+     * The raw transcript exists only in this call and the transport request; [SummarySessionStore]
+     * receives generated text plus an opaque local source key.
+     */
+    fun runUserApprovedSummary(source: SummaryRequestPolicy.Source, transcript: String) {
+        if (activeJob?.isActive == true) {
+            _summaryUiState.update {
+                it.copy(statusMessage = "다른 연결 작업이 끝난 뒤 요약을 다시 시작하세요.")
+            }
+            return
+        }
+        if (controller.authenticationState() !is OAuthAuthenticationState.Authenticated) {
+            refreshAuthenticationState()
+            _summaryUiState.update {
+                it.copy(statusMessage = "ChatGPT 연결을 완료한 뒤 선택한 전사를 요약할 수 있습니다.")
+            }
+            return
+        }
+        val preparation = when (val result = SummaryRequestPolicy.prepare(source, transcript)) {
+            is SummaryRequestPolicy.Preparation.Ready -> result
+            is SummaryRequestPolicy.Preparation.Rejected -> {
+                _summaryUiState.update { it.copy(statusMessage = result.message) }
+                return
+            }
+        }
+        val lease = when (val result = DeviceWorkRuntime.coordinator.tryAcquire(
+            owner = DeviceWorkCoordinator.Owner.SUMMARY,
+            workId = "summary_${source.key}",
+        )) {
+            is DeviceWorkCoordinator.AcquireResult.Acquired -> result.lease
+            is DeviceWorkCoordinator.AcquireResult.Busy -> {
+                _summaryUiState.update {
+                    it.copy(statusMessage = "녹음 또는 전사가 끝난 뒤 요약을 시작하세요.")
+                }
+                return
+            }
+        }
+
+        activeJob = viewModelScope.launch {
+            var outcome = DeviceWorkCoordinator.TerminalOutcome.FAILED
+            _summaryUiState.update {
+                it.copy(
+                    activeSourceKey = source.key,
+                    isRunning = true,
+                    statusMessage = "선택한 전사를 요약하는 중입니다.",
+                )
+            }
+            try {
+                val summary = controller.runUserApprovedSummary(preparation.requestJson)
+                DeviceWorkRuntime.coordinator.beginFinalization(lease)
+                withContext(Dispatchers.IO) {
+                    summaryStore.saveCompleted(source, summary)
+                }
+                val entries = withContext(Dispatchers.IO) { summaryStore.listAll() }
+                _summaryUiState.value = SummaryUiState(
+                    entries = entries,
+                    statusMessage = "선택한 전사의 요약이 저장되었습니다.",
+                )
+                outcome = DeviceWorkCoordinator.TerminalOutcome.COMPLETED
+            } catch (error: CancellationException) {
+                outcome = DeviceWorkCoordinator.TerminalOutcome.CANCELLED
+                _summaryUiState.update { it.copy(statusMessage = "요약이 취소되었습니다.") }
+                throw error
+            } catch (error: OAuthException) {
+                _uiState.value = controller.authenticationState().toUiState(
+                    statusOverride = oauthFailureMessage(error.kind),
+                )
+                _summaryUiState.update { it.copy(statusMessage = "요약 연결에 실패했습니다. 다시 시도하세요.") }
+            } catch (_: Exception) {
+                _summaryUiState.update {
+                    it.copy(statusMessage = "요약에 실패했습니다. 민감한 오류 상세는 표시하지 않습니다.")
+                }
+            } finally {
+                DeviceWorkRuntime.coordinator.beginFinalization(lease)
+                DeviceWorkRuntime.coordinator.releaseAfterTerminal(lease, outcome)
+                _summaryUiState.update { it.copy(activeSourceKey = "", isRunning = false) }
+            }
+        }.also { job -> job.invokeOnCompletion { if (activeJob === job) activeJob = null } }
+    }
+
+    fun refreshSummaryEntries() {
+        viewModelScope.launch {
+            val entries = withContext(Dispatchers.IO) { summaryStore.listAll() }
+            _summaryUiState.update { it.copy(entries = entries) }
+        }
     }
 
     override fun onCleared() {

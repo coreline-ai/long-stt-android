@@ -14,7 +14,8 @@ import org.json.JSONObject
 
 /**
  * App-owned boundary for Codex OAuth. Tokens never leave the upstream library and this class
- * exposes only coarse authentication state plus a fixed non-sensitive parity probe.
+ * exposes only coarse authentication state, a fixed non-sensitive parity probe, and an explicit
+ * user-approved summary request. Tokens and transcripts are never persisted by this boundary.
  */
 class CodexSummaryAuthController(context: Context) {
     private val oauth = OAuthManager(
@@ -42,19 +43,26 @@ class CodexSummaryAuthController(context: Context) {
     fun logout() = oauth.logout()
 
     suspend fun runParityProbe(): String {
-        val response = session.stream(CodexSummaryProfile.parityProbeRequest())
+        return collectText(CodexSummaryProfile.parityProbeRequest(), MAX_VISIBLE_PROBE_CHARS)
+    }
+
+    suspend fun runUserApprovedSummary(requestJson: String): String =
+        collectText(requestJson, SummaryRequestPolicy.MAX_SUMMARY_CHARS)
+
+    private suspend fun collectText(requestJson: String, maxChars: Int): String {
+        val response = session.stream(requestJson)
         if (response.statusCode !in 200..299) {
-            throw HostLlmRequestException("Codex parity probe failed")
+            throw HostLlmRequestException("Codex request failed")
         }
         val output = StringBuilder()
         response.events.collect { event ->
             val text = JSONObject(event.dataJson).optString("text")
-            if (text.isNotEmpty() && output.length < MAX_VISIBLE_PROBE_CHARS) {
-                output.append(text.take(MAX_VISIBLE_PROBE_CHARS - output.length))
+            if (text.isNotEmpty() && output.length < maxChars) {
+                output.append(text.take(maxChars - output.length))
             }
         }
         return output.toString().trim().ifEmpty {
-            throw HostLlmRequestException("Codex parity probe returned no text")
+            throw HostLlmRequestException("Codex request returned no text")
         }
     }
 
