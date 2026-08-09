@@ -2,6 +2,7 @@
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <sys/sysinfo.h>
 #include <string.h>
@@ -333,7 +334,15 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_getSystemInfo(
 ) {
     UNUSED(thiz);
     const char *sysinfo = whisper_print_system_info();
-    jstring string = (*env)->NewStringUTF(env, sysinfo);
+    const char *prefix = "whisper.cpp " WHISPER_VERSION " (" WHISPER_SOURCE_COMMIT "); ";
+    size_t length = strlen(prefix) + strlen(sysinfo) + 1;
+    char *build_info = (char *) malloc(length);
+    if (build_info == NULL) {
+        return (*env)->NewStringUTF(env, sysinfo);
+    }
+    snprintf(build_info, length, "%s%s", prefix, sysinfo);
+    jstring string = (*env)->NewStringUTF(env, build_info);
+    free(build_info);
     return string;
 }
 

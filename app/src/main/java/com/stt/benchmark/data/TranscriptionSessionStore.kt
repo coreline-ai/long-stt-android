@@ -44,8 +44,46 @@ class TranscriptionSessionStore(context: Context) {
         val errorMessage: String = "",
         val createdAtMs: Long,
         val updatedAtMs: Long,
-        val chunks: List<CompletedChunk> = emptyList()
+        val chunks: List<CompletedChunk> = emptyList(),
+        /** 직접 녹음에서 시작된 child 전사만 채우는 optional 연결 메타데이터. */
+        val recordingSessionId: String = "",
+        val recordingGroupId: String = "",
+        val mediaId: String = "",
+        val recordingSequence: Int = -1,
     ) {
+        /** schema v1/Java instrumentation source compatibility constructor. */
+        constructor(
+            sessionId: String,
+            status: Status,
+            modelPath: String,
+            audioPath: String,
+            note: String,
+            durationMs: Long,
+            totalChunks: Int,
+            currentChunk: Int,
+            errorMessage: String,
+            createdAtMs: Long,
+            updatedAtMs: Long,
+            chunks: List<CompletedChunk>,
+        ) : this(
+            sessionId = sessionId,
+            status = status,
+            modelPath = modelPath,
+            audioPath = audioPath,
+            note = note,
+            durationMs = durationMs,
+            totalChunks = totalChunks,
+            currentChunk = currentChunk,
+            errorMessage = errorMessage,
+            createdAtMs = createdAtMs,
+            updatedAtMs = updatedAtMs,
+            chunks = chunks,
+            recordingSessionId = "",
+            recordingGroupId = "",
+            mediaId = "",
+            recordingSequence = -1,
+        )
+
         val progress: Float
             get() = if (totalChunks > 0) chunks.size.toFloat() / totalChunks.toFloat() else 0f
 
@@ -94,26 +132,54 @@ class TranscriptionSessionStore(context: Context) {
 
     fun load(sessionId: String): Checkpoint? {
         val file = checkpointFile(sessionId)
-        if (!file.exists()) return null
         return try {
-            fromJson(JSONObject(file.readText(Charsets.UTF_8)))
+            val json = AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+            fromJson(JSONObject(json))
         } catch (_: Exception) {
             null
         }
     }
 
     /** 결과 보관함용 전체 세션 목록. 손상된 checkpoint는 목록에서 제외한다. */
-    fun listAll(): List<Checkpoint> = sessionsDir.listFiles { file -> file.extension == "json" }
-        ?.sortedByDescending { it.lastModified() }
-        ?.mapNotNull { load(it.nameWithoutExtension) }
+    fun listAll(): List<Checkpoint> = sessionsDir.listFiles()
         .orEmpty()
+        .mapNotNull { file ->
+            when {
+                file.name.endsWith(".json") -> file.name.removeSuffix(".json")
+                file.name.endsWith(".json.bak") -> file.name.removeSuffix(".json.bak")
+                else -> null
+            }?.let { sessionId -> sessionId to file.lastModified() }
+        }
+        .distinctBy { it.first }
+        .sortedByDescending { it.second }
+        .mapNotNull { (sessionId, _) -> load(sessionId) }
 
     /** 활성·재개 대상 세션은 ViewModel에서 먼저 차단한 뒤 삭제한다. */
     fun delete(sessionId: String): Boolean {
         if (!sessionId.matches(Regex("[A-Za-z0-9_-]+"))) return false
-        val file = checkpointFile(sessionId)
-        return !file.exists() || file.delete()
+        return try {
+            AtomicFile(checkpointFile(sessionId)).delete()
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
+
+    /**
+     * 이전 process가 사라졌는데 RUNNING 계열로 남은 세션을 자동 실행하지 않고 재개 대기로 바꾼다.
+     * COMPLETED/FAILED/CANCELLED 및 이미 INTERRUPTED인 세션은 저장하지 않는다.
+     */
+    @Synchronized
+    fun reconcileAfterProcessDeath(nowMs: Long = System.currentTimeMillis()): List<Checkpoint> =
+        listAll().mapNotNull { checkpoint ->
+            val reconciled = TranscriptionLifecyclePolicy.reconcileAfterProcessDeath(checkpoint, nowMs)
+            if (reconciled === checkpoint) {
+                null
+            } else {
+                save(reconciled)
+                reconciled
+            }
+        }
 
     fun hasIncompleteForAudio(audioPath: String): Boolean = listAll().any {
         it.audioPath == audioPath && it.status in INCOMPLETE_STATUSES
@@ -131,10 +197,16 @@ class TranscriptionSessionStore(context: Context) {
                     it.modelPath == modelPath && it.audioPath == audioPath
             }
 
+    fun latestIncompleteForGroup(recordingGroupId: String, mediaId: String): Checkpoint? =
+        listAll().firstOrNull {
+            it.status in INCOMPLETE_STATUSES &&
+                it.recordingGroupId == recordingGroupId && it.mediaId == mediaId
+        }
+
     private fun checkpointFile(sessionId: String): File = File(sessionsDir, "$sessionId.json")
 
     private fun toJson(checkpoint: Checkpoint): JSONObject = JSONObject().apply {
-        put("version", 1)
+        put("version", CURRENT_SCHEMA_VERSION)
         put("sessionId", checkpoint.sessionId)
         put("status", checkpoint.status.name)
         put("modelPath", checkpoint.modelPath)
@@ -146,6 +218,10 @@ class TranscriptionSessionStore(context: Context) {
         put("errorMessage", checkpoint.errorMessage)
         put("createdAtMs", checkpoint.createdAtMs)
         put("updatedAtMs", checkpoint.updatedAtMs)
+        put("recordingSessionId", checkpoint.recordingSessionId)
+        put("recordingGroupId", checkpoint.recordingGroupId)
+        put("mediaId", checkpoint.mediaId)
+        put("recordingSequence", checkpoint.recordingSequence)
         put("chunks", JSONArray().apply {
             checkpoint.chunks.sortedBy { it.index }.forEach { chunk ->
                 put(JSONObject().apply {
@@ -173,6 +249,8 @@ class TranscriptionSessionStore(context: Context) {
     }
 
     private fun fromJson(json: JSONObject): Checkpoint {
+        val version = json.optInt("version", 1)
+        require(version in 1..CURRENT_SCHEMA_VERSION) { "지원하지 않는 STT session schema: $version" }
         val chunks = json.optJSONArray("chunks") ?: JSONArray()
         return Checkpoint(
             sessionId = json.getString("sessionId"),
@@ -186,6 +264,10 @@ class TranscriptionSessionStore(context: Context) {
             errorMessage = json.optString("errorMessage"),
             createdAtMs = json.getLong("createdAtMs"),
             updatedAtMs = json.getLong("updatedAtMs"),
+            recordingSessionId = json.optString("recordingSessionId"),
+            recordingGroupId = json.optString("recordingGroupId"),
+            mediaId = json.optString("mediaId"),
+            recordingSequence = json.optInt("recordingSequence", -1),
             chunks = List(chunks.length()) { index ->
                 val chunk = chunks.getJSONObject(index)
                 val segmentArray = chunk.optJSONArray("segments") ?: JSONArray()
@@ -214,6 +296,7 @@ class TranscriptionSessionStore(context: Context) {
 
     private companion object {
         const val SESSIONS_DIR = "stt_sessions"
-        val INCOMPLETE_STATUSES = setOf(Status.PREPARING, Status.RUNNING, Status.COOLING, Status.INTERRUPTED)
+        const val CURRENT_SCHEMA_VERSION = 2
+        val INCOMPLETE_STATUSES = TranscriptionLifecyclePolicy.resumableStatuses
     }
 }

@@ -1,0 +1,8 @@
+# path	bytes	sha256	source_and_license
+# Product visual assets only. Screenshots are documentation evidence and are not packaged in the APK.
+app/src/main/res/drawable/ic_launcher_background.xml	183	986b1c17303bd10d8ceb7758a2e9eb3cb2cb00a9533b88b3a24316d951a73224	Project-maintained XML vector; no third-party raster asset
+app/src/main/res/drawable/ic_launcher_foreground.xml	892	ca5ab5c656275ed8c7efa0f818553fba710314b8dcc890365f7a27969aa73976	Project-maintained XML vector; no third-party raster asset
+app/src/main/res/drawable/ic_mic_notification.xml	526	3a12e519dfb8cb9197bc3d9646cd1bf1c098d9ff0dadaeece5696fa7974fb049	Project-maintained XML vector; no third-party raster asset
+app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml	273	1c832bf194d8eecd439a92bcced0df144c9f566b934b3d7865e983d8ee8dbdeb	Project-maintained XML vector reference; no third-party raster asset
+app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml	273	1c832bf194d8eecd439a92bcced0df144c9f566b934b3d7865e983d8ee8dbdeb	Project-maintained XML vector reference; no third-party raster asset
+app/src/main/res/mipmap-hdpi/ic_launcher.xml	261	7bafac4f2c93ee0401479732b881e9ec245058351d579d56170cbac1c274ec63	Project-maintained XML vector reference; no third-party raster asset

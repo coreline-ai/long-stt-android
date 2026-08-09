@@ -1,0 +1,5 @@
+# scripts/setup_whisper.sh와 app/src/main/cpp/CMakeLists.txt가 함께 읽는 기준선.
+# commit 변경은 native smoke/16KB/실기기 검증 결과와 함께 review한다.
+WHISPER_CPP_REMOTE=https://github.com/ggerganov/whisper.cpp.git
+WHISPER_CPP_COMMIT=8631825d41a2712268813981a9550b04a3f225e5
+WHISPER_CPP_VERSION=1.9.2

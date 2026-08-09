@@ -10,11 +10,17 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.StatFs
-import android.util.Log
+import com.stt.benchmark.core.AppLog
 import androidx.core.app.NotificationCompat
 import com.stt.benchmark.R
+import com.stt.benchmark.core.DeviceWorkCoordinator
+import com.stt.benchmark.core.DeviceWorkRuntime
 import com.stt.benchmark.data.BenchmarkRecorder
+import com.stt.benchmark.data.TerminalCheckpointPersistence
+import com.stt.benchmark.data.TranscriptionLifecyclePolicy
+import com.stt.benchmark.data.TranscriptionPlan
 import com.stt.benchmark.data.TranscriptionSessionStore
+import com.stt.benchmark.recording.RecordingTranscriptionCoordinator
 import com.stt.benchmark.whisper.AudioDecoder
 import com.stt.benchmark.whisper.TranscriptSegment
 import com.stt.benchmark.whisper.TranscriptionResult
@@ -40,15 +46,20 @@ import java.io.File
  */
 class TranscriptionService : Service() {
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val serviceJob = SupervisorJob()
+    private val serviceScope = CoroutineScope(serviceJob + Dispatchers.Default)
     private val store by lazy { TranscriptionSessionStore(this) }
     private val recorder by lazy { BenchmarkRecorder(this) }
     private val engine by lazy { WhisperCppEngine(this) }
+    private val recordingCoordinator by lazy { RecordingTranscriptionCoordinator(this) }
 
-    private var activeJob: Job? = null
-    private var activeSessionId: String? = null
-    private var cancelRequested = false
+    @Volatile private var activeJob: Job? = null
+    @Volatile private var activeSessionId: String? = null
+    @Volatile private var cancelRequested = false
     private var wakeLock: PowerManager.WakeLock? = null
+    private var workLease: DeviceWorkCoordinator.Lease? = null
+    /** Claimed before a terminal child status broadcast, then run without leaving this FGS. */
+    private var pendingGroupLaunch: RecordingTranscriptionCoordinator.ChildLaunchRequest? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -57,44 +68,164 @@ class TranscriptionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_CANCEL -> {
-                cancelRequested = true
-                activeJob?.cancel(CancellationException("사용자가 foreground 전사를 중지함"))
-            }
+            ACTION_CANCEL -> requestCancellation(intent, startId)
+            ACTION_QUERY -> queryOrReconcile(startId)
             ACTION_RESUME -> {
                 val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
-                sessionId?.let { store.load(it) }?.let { launchSession(it) }
+                val checkpoint = sessionId?.let { store.load(it) }
+                if (checkpoint == null) {
+                    publishTransientFailure("재개할 전사 세션을 찾을 수 없습니다")
+                } else {
+                    launchSession(checkpoint)
+                }
             }
             ACTION_START -> {
                 val modelPath = intent.getStringExtra(EXTRA_MODEL_PATH)
                 val audioPath = intent.getStringExtra(EXTRA_AUDIO_PATH)
                 val note = intent.getStringExtra(EXTRA_NOTE).orEmpty()
+                val recordingSessionId = intent.getStringExtra(EXTRA_RECORDING_SESSION_ID).orEmpty()
+                val recordingGroupId = intent.getStringExtra(EXTRA_RECORDING_GROUP_ID).orEmpty()
+                val mediaId = intent.getStringExtra(EXTRA_MEDIA_ID).orEmpty()
+                val recordingSequence = intent.getIntExtra(EXTRA_RECORDING_SEQUENCE, -1)
                 if (modelPath.isNullOrBlank() || audioPath.isNullOrBlank()) {
                     publishTransientFailure("모델 또는 오디오 경로가 없습니다")
                 } else {
-                    val resumable = store.latestIncompleteFor(modelPath, audioPath)
-                    if (resumable != null) launchSession(resumable) else launchNewSession(modelPath, audioPath, note)
+                    val resumable = if (recordingGroupId.isNotBlank() && mediaId.isNotBlank()) {
+                        store.latestIncompleteForGroup(recordingGroupId, mediaId)
+                    } else {
+                        store.latestIncompleteFor(modelPath, audioPath)
+                    }
+                    if (resumable != null) {
+                        launchSession(resumable)
+                    } else {
+                        launchNewSession(
+                            modelPath = modelPath,
+                            audioPath = audioPath,
+                            note = note,
+                            recordingSessionId = recordingSessionId,
+                            recordingGroupId = recordingGroupId,
+                            mediaId = mediaId,
+                            recordingSequence = recordingSequence,
+                        )
+                    }
                 }
             }
-            null -> store.latestIncomplete()?.let { launchSession(it) }
+            null -> reconcileStickyRestart(startId)
         }
-        return START_STICKY
+        // process death 뒤에는 startup reconciliation을 거쳐 사용자가 다시 실행을 선택한다.
+        return START_NOT_STICKY
+    }
+
+    private fun queryOrReconcile(startId: Int) {
+        if (activeJob?.isActive == true) {
+            publishActiveSnapshot("현재 전사 상태")
+        } else {
+            reconcileStickyRestart(startId)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        // process-local lease를 놓기 전에 최소한 재개 가능한 terminal checkpoint를 동기 보존한다.
+        activeSessionId?.let(store::load)?.takeIf {
+            TranscriptionLifecyclePolicy.needsStartupReconciliation(it.status)
+        }?.let { checkpoint ->
+            runCatching {
+                store.save(
+                    TranscriptionLifecyclePolicy.reconcileAfterProcessDeath(
+                        checkpoint = checkpoint,
+                        nowMs = System.currentTimeMillis(),
+                        message = "전사 Service 종료로 재개 대기 상태로 전환됨",
+                    )
+                )
+            }
+        }
         if (activeJob?.isActive == true) {
             activeJob?.cancel(CancellationException("Service가 종료됨"))
         }
         serviceScope.launch(NonCancellable + Dispatchers.IO) { engine.release() }
+        workLease?.let { lease ->
+            DeviceWorkRuntime.coordinator.releaseAfterTerminal(lease, DeviceWorkCoordinator.TerminalOutcome.FAILED)
+        }
+        workLease = null
+        serviceJob.cancel()
         releaseWakeLock()
         super.onDestroy()
     }
 
-    private fun launchNewSession(modelPath: String, audioPath: String, note: String) {
+    private fun requestCancellation(intent: Intent, startId: Int) {
+        cancelRequested = true
+        val running = activeJob
+        if (running?.isActive == true) {
+            running.cancel(CancellationException("사용자가 foreground 전사를 중지함"))
+            return
+        }
+
+        startForegroundNow("중단 상태 정리 중")
+        val requestedSessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+        serviceScope.launch {
+            try {
+                val checkpoint = withContext(Dispatchers.IO) {
+                    requestedSessionId?.let(store::load) ?: store.latestIncomplete()
+                }
+                if (checkpoint != null && TranscriptionLifecyclePolicy.canResume(checkpoint.status)) {
+                    persistTerminal(
+                        checkpoint,
+                        TranscriptionSessionStore.Status.CANCELLED,
+                        "사용자가 전사를 취소함"
+                    )
+                } else {
+                    publishStatus("", TranscriptionSessionStore.Status.CANCELLED, 0f, 0, 0, "실행 중인 전사가 없습니다")
+                }
+            } catch (error: Throwable) {
+                AppLog.e(TAG, "미완료 세션 취소 상태 저장 실패", error)
+                publishStatus("", TranscriptionSessionStore.Status.FAILED, 0f, 0, 0, "중단 상태를 저장하지 못했습니다")
+            } finally {
+                finishRun(startId)
+            }
+        }
+    }
+
+    /** START_STICKY 잔여 호출은 자동 재개하지 않고 RUNNING 계열만 INTERRUPTED로 정리한다. */
+    private fun reconcileStickyRestart(startId: Int) {
+        startForegroundNow("중단된 전사 상태 확인 중")
+        serviceScope.launch {
+            try {
+                val reconciled = withContext(Dispatchers.IO) { store.reconcileAfterProcessDeath() }
+                val latest = reconciled.maxByOrNull { it.updatedAtMs }
+                if (latest != null) {
+                    publishStatus(
+                        latest.sessionId,
+                        latest.status,
+                        latest.progress,
+                        latest.currentChunk,
+                        latest.totalChunks,
+                        "중단된 전사를 재개 대기 상태로 전환했습니다"
+                    )
+                } else {
+                    publishStatus("", TranscriptionSessionStore.Status.INTERRUPTED, 0f, 0, 0, "자동 재개할 작업이 없습니다")
+                }
+            } catch (error: Throwable) {
+                AppLog.e(TAG, "중단 상태 조정 실패", error)
+                publishStatus("", TranscriptionSessionStore.Status.FAILED, 0f, 0, 0, "중단 상태를 확인하지 못했습니다")
+            } finally {
+                finishRun(startId)
+            }
+        }
+    }
+
+    private fun launchNewSession(
+        modelPath: String,
+        audioPath: String,
+        note: String,
+        recordingSessionId: String,
+        recordingGroupId: String,
+        mediaId: String,
+        recordingSequence: Int,
+    ) {
         if (activeJob?.isActive == true) {
-            publishStatus(activeSessionId.orEmpty(), TranscriptionSessionStore.Status.RUNNING, 0f, 0, 0, "이미 전사 중입니다")
+            publishActiveSnapshot("이미 전사 중입니다")
             return
         }
         startForegroundNow("전사 준비 중")
@@ -102,42 +233,71 @@ class TranscriptionService : Service() {
         activeJob = serviceScope.launch {
             var checkpoint: TranscriptionSessionStore.Checkpoint? = null
             try {
-                checkpoint = createCheckpoint(modelPath, audioPath, note)
+                checkpoint = createCheckpoint(
+                    modelPath = modelPath,
+                    audioPath = audioPath,
+                    note = note,
+                    recordingSessionId = recordingSessionId,
+                    recordingGroupId = recordingGroupId,
+                    mediaId = mediaId,
+                    recordingSequence = recordingSequence,
+                )
                 activeSessionId = checkpoint.sessionId
+                if (!acquireWorkLease(checkpoint)) {
+                    persistTerminal(checkpoint, TranscriptionSessionStore.Status.FAILED, "다른 장시간 작업이 실행 중입니다")
+                    return@launch
+                }
                 runCheckpoint(checkpoint)
             } catch (cancelled: CancellationException) {
-                checkpoint?.let { persistTerminal(it, if (cancelRequested) TranscriptionSessionStore.Status.CANCELLED else TranscriptionSessionStore.Status.INTERRUPTED, "전사 중단") }
+                checkpoint?.let {
+                    persistTerminal(
+                        it,
+                        TranscriptionLifecyclePolicy.terminalStatusForCancellation(cancelRequested),
+                        if (cancelRequested) "사용자가 전사를 취소함" else "전사 서비스가 중단됨"
+                    )
+                }
                 throw cancelled
             } catch (error: Throwable) {
-                Log.e(TAG, "세션 시작 실패", error)
+                AppLog.e(TAG, "세션 시작 실패", error)
                 checkpoint?.let { persistTerminal(it, TranscriptionSessionStore.Status.FAILED, error.message ?: "세션 시작 실패") }
                     ?: publishTransientFailure(error.message ?: "세션 시작 실패")
             } finally {
-                finishIfIdle(startId = null)
+                finishRun(startId = null)
             }
         }
     }
 
     private fun launchSession(checkpoint: TranscriptionSessionStore.Checkpoint) {
-        if (activeJob?.isActive == true) return
+        if (activeJob?.isActive == true) {
+            publishActiveSnapshot("이미 전사 중입니다")
+            return
+        }
+        if (!TranscriptionLifecyclePolicy.canResume(checkpoint.status)) {
+            publishTransientFailure("${checkpoint.status.name} 상태의 전사는 재개할 수 없습니다")
+            return
+        }
         startForegroundNow("전사 재개 준비 중")
         cancelRequested = false
         activeSessionId = checkpoint.sessionId
         activeJob = serviceScope.launch {
             try {
+                if (!acquireWorkLease(checkpoint)) {
+                    persistTerminal(checkpoint, TranscriptionSessionStore.Status.FAILED, "다른 장시간 작업이 실행 중입니다")
+                    return@launch
+                }
                 runCheckpoint(checkpoint)
             } catch (cancelled: CancellationException) {
                 persistTerminal(
                     checkpoint,
-                    if (cancelRequested) TranscriptionSessionStore.Status.CANCELLED else TranscriptionSessionStore.Status.INTERRUPTED,
-                    "전사 중단"
+                    TranscriptionLifecyclePolicy.terminalStatusForCancellation(cancelRequested),
+                    if (cancelRequested) "사용자가 전사를 취소함" else "전사 서비스가 중단됨"
                 )
                 throw cancelled
             } catch (error: Throwable) {
-                Log.e(TAG, "세션 재개 실패", error)
+                AppLog.e(TAG, "세션 재개 실패", error)
                 persistTerminal(checkpoint, TranscriptionSessionStore.Status.FAILED, error.message ?: "세션 재개 실패")
             } finally {
-                finishIfIdle(startId = null)
+                finishRun(startId = null)
             }
         }
     }
@@ -145,14 +305,18 @@ class TranscriptionService : Service() {
     private suspend fun createCheckpoint(
         modelPath: String,
         audioPath: String,
-        note: String
+        note: String,
+        recordingSessionId: String,
+        recordingGroupId: String,
+        mediaId: String,
+        recordingSequence: Int,
     ): TranscriptionSessionStore.Checkpoint {
         require(isManagedReadableFile(modelPath)) { "앱 내부 모델 파일을 찾을 수 없습니다" }
         require(isManagedReadableFile(audioPath)) { "앱 내부 오디오 파일을 찾을 수 없습니다" }
         ensureFreeSpace()
         val durationMs = withContext(Dispatchers.IO) { AudioDecoder.durationMs(audioPath) }
             ?: throw IllegalStateException("오디오 길이를 확인할 수 없습니다")
-        val totalChunks = ((durationMs + CHUNK_DURATION_MS - 1L) / CHUNK_DURATION_MS).toInt().coerceAtLeast(1)
+        val totalChunks = TranscriptionPlan.create(durationMs).totalChunks
         val now = System.currentTimeMillis()
         return TranscriptionSessionStore.Checkpoint(
             sessionId = store.newSessionId(),
@@ -164,8 +328,22 @@ class TranscriptionService : Service() {
             totalChunks = totalChunks,
             currentChunk = 0,
             createdAtMs = now,
-            updatedAtMs = now
+            updatedAtMs = now,
+            recordingSessionId = recordingSessionId,
+            recordingGroupId = recordingGroupId,
+            mediaId = mediaId,
+            recordingSequence = recordingSequence,
         ).also { persistAndPublish(it, "전사 세션 생성") }
+    }
+
+    private fun acquireWorkLease(checkpoint: TranscriptionSessionStore.Checkpoint): Boolean {
+        val acquired = DeviceWorkRuntime.coordinator.tryAcquire(
+            DeviceWorkCoordinator.Owner.TRANSCRIPTION,
+            checkpoint.sessionId,
+        )
+        if (acquired !is DeviceWorkCoordinator.AcquireResult.Acquired) return false
+        workLease = acquired.lease
+        return true
     }
 
     private suspend fun runCheckpoint(initial: TranscriptionSessionStore.Checkpoint) {
@@ -187,12 +365,18 @@ class TranscriptionService : Service() {
 
         var usedContext = false
         val completed = checkpoint.chunks.associateBy { it.index }.toMutableMap()
-        for (chunkIndex in 1..checkpoint.totalChunks) {
+        val plan = TranscriptionPlan.create(checkpoint.durationMs)
+        require(plan.totalChunks == checkpoint.totalChunks) {
+            "저장된 청크 수가 현재 계획과 다릅니다: ${checkpoint.totalChunks}/${plan.totalChunks}"
+        }
+        for (plannedChunk in plan.chunks) {
             currentCoroutineContext().ensureActive()
+            renewWakeLock()
+            val chunkIndex = plannedChunk.index
             if (completed.containsKey(chunkIndex)) continue
 
-            val primaryStartMs = (chunkIndex - 1L) * CHUNK_DURATION_MS
-            val primaryEndMs = minOf(checkpoint.durationMs, primaryStartMs + CHUNK_DURATION_MS)
+            val primaryStartMs = plannedChunk.primaryStartMs
+            val primaryEndMs = plannedChunk.primaryEndMs
             checkpoint = checkpoint.copy(
                 status = TranscriptionSessionStore.Status.RUNNING,
                 currentChunk = chunkIndex,
@@ -205,6 +389,8 @@ class TranscriptionService : Service() {
                 chunkIndex = chunkIndex,
                 primaryStartMs = primaryStartMs,
                 primaryEndMs = primaryEndMs,
+                decodeStartMs = plannedChunk.decodeStartMs,
+                decodeEndMs = plannedChunk.decodeEndMs,
                 reloadModelBeforeAttempt = usedContext
             )
             usedContext = true
@@ -254,7 +440,13 @@ class TranscriptionService : Service() {
                 modelSize = "${File(checkpoint.modelPath).length() / 1024 / 1024}MB",
                 engineName = engine.engineName
             )
-            recorder.appendResult(result, checkpoint.audioPath, File(checkpoint.modelPath).name, checkpoint.note)
+            recorder.appendResult(
+                result = result,
+                audioFile = checkpoint.audioPath,
+                modelName = File(checkpoint.modelPath).name,
+                note = checkpoint.note,
+                sessionId = checkpoint.sessionId
+            )
         }
         persistAndPublish(checkpoint, "전사 완료")
     }
@@ -264,10 +456,26 @@ class TranscriptionService : Service() {
         status: TranscriptionSessionStore.Status,
         error: String
     ) {
-        val latest = store.load(initial.sessionId) ?: initial
-        persistAndPublish(
-            latest.copy(status = status, errorMessage = error, updatedAtMs = System.currentTimeMillis()),
-            error
+        // 부모 Job이 이미 cancel된 catch 블록에서도 terminal checkpoint와 UI 상태를 반드시 남긴다.
+        TerminalCheckpointPersistence.persist(
+            initial = initial,
+            status = status,
+            errorMessage = error,
+            loadLatest = { store.load(initial.sessionId) },
+            save = store::save,
+            // Group ownership advances before the status broadcast reaches the background UI.
+            // Otherwise a ViewModel attempts to start the next FGS after this service exits.
+            afterSave = { terminal -> prepareRecordingGroupHandoff(terminal, error) },
+            publish = { checkpoint ->
+                publishStatus(
+                    checkpoint.sessionId,
+                    checkpoint.status,
+                    checkpoint.progress,
+                    checkpoint.currentChunk,
+                    checkpoint.totalChunks,
+                    error
+                )
+            }
         )
     }
 
@@ -276,6 +484,9 @@ class TranscriptionService : Service() {
         detail: String
     ) {
         withContext(Dispatchers.IO) { store.save(checkpoint) }
+        if (checkpoint.status in TERMINAL_STATUSES) {
+            prepareRecordingGroupHandoff(checkpoint, detail)
+        }
         publishStatus(
             checkpoint.sessionId,
             checkpoint.status,
@@ -283,6 +494,44 @@ class TranscriptionService : Service() {
             checkpoint.currentChunk,
             checkpoint.totalChunks,
             detail.ifBlank { checkpoint.errorMessage }
+        )
+    }
+
+    /**
+     * Claim the following recording child while this service is still foreground.  The next
+     * actual run is started by [finishRun] after the current engine/lease has been released.
+     * This prevents Android 14+ background FGS-start restrictions from breaking child 2+.
+     */
+    private fun prepareRecordingGroupHandoff(
+        checkpoint: TranscriptionSessionStore.Checkpoint,
+        detail: String,
+    ) {
+        if (checkpoint.recordingGroupId.isBlank() || checkpoint.mediaId.isBlank()) return
+        val result = recordingCoordinator.onChildEvent(
+            RecordingTranscriptionCoordinator.ChildEvent(
+                groupId = checkpoint.recordingGroupId,
+                mediaId = checkpoint.mediaId,
+                sttSessionId = checkpoint.sessionId,
+                status = checkpoint.status,
+                detail = detail.ifBlank { checkpoint.errorMessage },
+            ),
+        )
+        if (result is RecordingTranscriptionCoordinator.EventResult.Updated && result.launchNext) {
+            pendingGroupLaunch = recordingCoordinator.prepareCurrentLaunch(result.group.groupId)?.request
+        }
+    }
+
+    private fun launchPreparedGroupChild(
+        request: RecordingTranscriptionCoordinator.ChildLaunchRequest,
+    ) {
+        launchNewSession(
+            modelPath = request.modelPath,
+            audioPath = request.audioPath,
+            note = request.note,
+            recordingSessionId = request.recordingSessionId,
+            recordingGroupId = request.groupId,
+            mediaId = request.mediaId,
+            recordingSequence = request.sequence,
         )
     }
 
@@ -298,6 +547,8 @@ class TranscriptionService : Service() {
         chunkIndex: Int,
         primaryStartMs: Long,
         primaryEndMs: Long,
+        decodeStartMs: Long,
+        decodeEndMs: Long,
         reloadModelBeforeAttempt: Boolean
     ): TranscribedWindow {
         var lastFailure: Throwable? = null
@@ -317,8 +568,6 @@ class TranscriptionService : Service() {
                     persistAndPublish(checkpoint, "청크 $chunkIndex/${checkpoint.totalChunks} 디코드/전사 중")
                 }
 
-                val decodeStartMs = (primaryStartMs - CHUNK_OVERLAP_MS).coerceAtLeast(0L)
-                val decodeEndMs = (primaryEndMs + CHUNK_OVERLAP_MS).coerceAtMost(checkpoint.durationMs)
                 val decoded = withContext(Dispatchers.IO) {
                     AudioDecoder.decodeWindowWithMetadata(
                         checkpoint.audioPath,
@@ -344,7 +593,7 @@ class TranscriptionService : Service() {
                 throw cancelled
             } catch (failure: Throwable) {
                 lastFailure = failure
-                Log.w(TAG, "청크 $chunkIndex 시도 ${attempt + 1} 실패", failure)
+                AppLog.w(TAG, "청크 $chunkIndex 시도 ${attempt + 1} 실패", failure)
             }
         }
         throw IllegalStateException(
@@ -428,6 +677,12 @@ class TranscriptionService : Service() {
             putExtra(EXTRA_CURRENT_CHUNK, currentChunk)
             putExtra(EXTRA_TOTAL_CHUNKS, totalChunks)
             putExtra(EXTRA_DETAIL, detail)
+            store.load(sessionId)?.let { checkpoint ->
+                putExtra(EXTRA_RECORDING_SESSION_ID, checkpoint.recordingSessionId)
+                putExtra(EXTRA_RECORDING_GROUP_ID, checkpoint.recordingGroupId)
+                putExtra(EXTRA_MEDIA_ID, checkpoint.mediaId)
+                putExtra(EXTRA_RECORDING_SEQUENCE, checkpoint.recordingSequence)
+            }
         })
     }
 
@@ -467,8 +722,14 @@ class TranscriptionService : Service() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:stt-transcription")
             .apply {
                 setReferenceCounted(false)
-                acquire()
+                acquire(WAKE_LOCK_TIMEOUT_MS)
             }
+    }
+
+    /** 각 10분 청크 시작 전에 bounded wake lock의 만료 시간을 갱신한다. */
+    private fun renewWakeLock() {
+        releaseWakeLock()
+        acquireWakeLock()
     }
 
     private fun releaseWakeLock() {
@@ -476,11 +737,48 @@ class TranscriptionService : Service() {
         wakeLock = null
     }
 
-    private fun finishIfIdle(startId: Int?) {
-        serviceScope.launch(NonCancellable + Dispatchers.IO) { engine.release() }
+    private fun publishActiveSnapshot(detail: String) {
+        val checkpoint = activeSessionId?.let(store::load)
+        if (checkpoint == null) {
+            publishStatus(activeSessionId.orEmpty(), TranscriptionSessionStore.Status.RUNNING, 0f, 0, 0, detail)
+            return
+        }
+        publishStatus(
+            checkpoint.sessionId,
+            checkpoint.status,
+            checkpoint.progress,
+            checkpoint.currentChunk,
+            checkpoint.totalChunks,
+            detail
+        )
+    }
+
+    private suspend fun finishRun(startId: Int?) = withContext(NonCancellable + Dispatchers.IO) {
+        // 취소된 문맥으로 돌아가는 순간 다시 CancellationException이 발생할 수 있으므로
+        // release뿐 아니라 service terminal cleanup 전체를 NonCancellable 안에서 끝낸다.
+        engine.release()
         releaseWakeLock()
+        workLease?.let { lease ->
+            val status = activeSessionId?.let(store::load)?.status
+            val outcome = when (status) {
+                TranscriptionSessionStore.Status.COMPLETED -> DeviceWorkCoordinator.TerminalOutcome.COMPLETED
+                TranscriptionSessionStore.Status.CANCELLED -> DeviceWorkCoordinator.TerminalOutcome.CANCELLED
+                else -> DeviceWorkCoordinator.TerminalOutcome.FAILED
+            }
+            DeviceWorkRuntime.coordinator.beginFinalization(lease)
+            DeviceWorkRuntime.coordinator.releaseAfterTerminal(lease, outcome)
+        }
+        workLease = null
         activeJob = null
         activeSessionId = null
+        val next = pendingGroupLaunch
+        pendingGroupLaunch = null
+        if (next != null) {
+            // Remain foreground for the complete group chain; do not hand off FGS startup to a
+            // background BroadcastReceiver/ViewModel after the current child terminal event.
+            launchPreparedGroupChild(next)
+            return@withContext
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         if (startId != null) stopSelf(startId) else stopSelf()
     }
@@ -489,6 +787,7 @@ class TranscriptionService : Service() {
         const val ACTION_START = "com.stt.benchmark.action.START_TRANSCRIPTION"
         const val ACTION_RESUME = "com.stt.benchmark.action.RESUME_TRANSCRIPTION"
         const val ACTION_CANCEL = "com.stt.benchmark.action.CANCEL_TRANSCRIPTION"
+        const val ACTION_QUERY = "com.stt.benchmark.action.QUERY_TRANSCRIPTION"
         const val ACTION_STATUS = "com.stt.benchmark.action.TRANSCRIPTION_STATUS"
 
         const val EXTRA_MODEL_PATH = "model_path"
@@ -500,12 +799,15 @@ class TranscriptionService : Service() {
         const val EXTRA_CURRENT_CHUNK = "current_chunk"
         const val EXTRA_TOTAL_CHUNKS = "total_chunks"
         const val EXTRA_DETAIL = "detail"
+        const val EXTRA_RECORDING_SESSION_ID = "recording_session_id"
+        const val EXTRA_RECORDING_GROUP_ID = "recording_group_id"
+        const val EXTRA_MEDIA_ID = "media_id"
+        const val EXTRA_RECORDING_SEQUENCE = "recording_sequence"
 
         private const val TAG = "TranscriptionService"
-        private const val CHANNEL_ID = "long_transcription"
-        private const val NOTIFICATION_ID = 6_001
-        private const val CHUNK_DURATION_MS = 10 * 60 * 1000L
-        private const val CHUNK_OVERLAP_MS = 1_000L
+        /** Stable and intentionally separate from RecorderNotificationFactory's recording identity. */
+        internal const val CHANNEL_ID = "long_transcription"
+        internal const val NOTIFICATION_ID = 6_001
         private const val COVERAGE_TOLERANCE_MS = 50L
         private const val SHORT_COOLDOWN_MS = 10_000L
         private const val LONG_COOLDOWN_MS = 30_000L
@@ -513,5 +815,12 @@ class TranscriptionService : Service() {
         private const val MIN_FREE_SPACE_BYTES = 256L * 1024L * 1024L
         private const val MAX_NOTE_LENGTH = 200
         private const val MAX_CHUNK_ATTEMPTS = 2
+        private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1000L
+        private val TERMINAL_STATUSES = setOf(
+            TranscriptionSessionStore.Status.COMPLETED,
+            TranscriptionSessionStore.Status.FAILED,
+            TranscriptionSessionStore.Status.CANCELLED,
+            TranscriptionSessionStore.Status.INTERRUPTED,
+        )
     }
 }

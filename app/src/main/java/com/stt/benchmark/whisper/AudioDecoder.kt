@@ -5,7 +5,7 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.os.Build
-import android.util.Log
+import com.stt.benchmark.core.AppLog
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -77,7 +77,7 @@ object AudioDecoder {
             val sampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val channels = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
-            Log.i(TAG, "전체 디코딩: $mime, ${sampleRate}Hz, ${channels}ch → 16kHz mono")
+            AppLog.i(TAG, "전체 디코딩: $mime, ${sampleRate}Hz, ${channels}ch → 16kHz mono")
 
             codec = MediaCodec.createDecoderByType(mime)
             codec.configure(inputFormat, null, null, 0)
@@ -92,11 +92,11 @@ object AudioDecoder {
                 initialSampleRate = sampleRate,
                 initialChannels = channels
             )
-            Log.i(TAG, "PCM 디코딩 완료: ${raw.samples.size} interleaved samples")
+            AppLog.i(TAG, "PCM 디코딩 완료: ${raw.samples.size} interleaved samples")
 
             toWhisperFloats(raw.samples, raw.channels, raw.sampleRate)
         } catch (e: Exception) {
-            Log.e(TAG, "전체 디코딩 실패: $filePath", e)
+            AppLog.e(TAG, "전체 디코딩 실패: $filePath", e)
             FloatArray(0)
         } finally {
             try { codec?.stop() } catch (_: Exception) {}
@@ -135,7 +135,7 @@ object AudioDecoder {
             val duration = format.getLong(MediaFormat.KEY_DURATION) / 1000L
             duration.takeIf { it > 0L }
         } catch (e: Exception) {
-            Log.w(TAG, "오디오 길이 조회 실패: $filePath", e)
+            AppLog.w(TAG, "오디오 길이 조회 실패: $filePath", e)
             null
         } finally {
             try { extractor.release() } catch (_: Exception) {}
@@ -182,7 +182,7 @@ object AudioDecoder {
             RandomAccessFile(file, "r").use { raf ->
                 val wav = readWavFormat(raf, file.length()) ?: return emptyWindow(startMs, requestedEndMs)
                 if (wav.audioFormat != PCM_WAV_FORMAT || wav.bitsPerSample != 16) {
-                    Log.w(TAG, "지원하지 않는 WAV 형식: format=${wav.audioFormat}, bits=${wav.bitsPerSample}")
+                    AppLog.w(TAG, "지원하지 않는 WAV 형식: format=${wav.audioFormat}, bits=${wav.bitsPerSample}")
                     return emptyWindow(startMs, requestedEndMs)
                 }
 
@@ -193,7 +193,7 @@ object AudioDecoder {
                     .coerceIn(startFrame, totalFrames)
                 val framesToRead = endFrame - startFrame
                 if (framesToRead <= 0L || framesToRead * bytesPerFrame > MAX_WINDOW_SOURCE_BYTES) {
-                    Log.w(TAG, "WAV 구간 길이 거부: frames=$framesToRead")
+                    AppLog.w(TAG, "WAV 구간 길이 거부: frames=$framesToRead")
                     return emptyWindow(startMs, requestedEndMs)
                 }
 
@@ -209,11 +209,11 @@ object AudioDecoder {
                 }
                 val decodedStartMs = startFrame * 1000L / wav.sampleRate
                 val decodedEndMs = endFrame * 1000L / wav.sampleRate
-                Log.i(TAG, "WAV 구간: $decodedStartMs~$decodedEndMs ms → ${pcm.size} samples @16k")
+                AppLog.i(TAG, "WAV 구간: $decodedStartMs~$decodedEndMs ms → ${pcm.size} samples @16k")
                 DecodedAudioWindow(pcm, startMs, requestedEndMs, decodedStartMs, decodedEndMs)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "WAV 구간 읽기 실패", e)
+            AppLog.e(TAG, "WAV 구간 읽기 실패", e)
             emptyWindow(startMs, requestedEndMs)
         }
     }
@@ -241,7 +241,7 @@ object AudioDecoder {
             val sampleRate = inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val channels = inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
-            Log.i(
+            AppLog.i(
                 TAG,
                 "압축 구간 디코드: $mime ${sampleRate}Hz ${channels}ch " +
                     "[${startMs}ms, ${startMs + durationMs}ms)"
@@ -268,14 +268,14 @@ object AudioDecoder {
             val decodedStartMs = raw.decodedStartUs / 1000L
             val decodedEndMs = (raw.decodedEndUs + 999L) / 1000L
 
-            Log.i(
+            AppLog.i(
                 TAG,
                 "압축 구간 완료: ${decodedStartMs}~${decodedEndMs}ms, " +
                     "in=${raw.samples.size} → out=${floats.size} samples"
             )
             DecodedAudioWindow(floats, startMs, startMs + durationMs, decodedStartMs, decodedEndMs)
         } catch (e: Exception) {
-            Log.e(TAG, "압축 구간 디코드 실패: $filePath [$startMs+${durationMs}ms]", e)
+            AppLog.e(TAG, "압축 구간 디코드 실패: $filePath [$startMs+${durationMs}ms]", e)
             emptyWindow(startMs, startMs + durationMs)
         } finally {
             try { codec?.stop() } catch (_: Exception) {}
@@ -361,7 +361,7 @@ object AudioDecoder {
                     if (Build.VERSION.SDK_INT >= 24 && fmt.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
                         pcmEncoding = fmt.getInteger(MediaFormat.KEY_PCM_ENCODING)
                     }
-                    Log.i(TAG, "출력 포맷: $fmt")
+                    AppLog.i(TAG, "출력 포맷: $fmt")
                 }
                 outIndex >= 0 -> {
                     progressed = true
@@ -410,7 +410,7 @@ object AudioDecoder {
         }
 
         if (idleLoops >= maxIdleLoops) {
-            Log.w(TAG, "디코드 루프 idle 한도 도달 (partial ${chunks.size} chunks)")
+            AppLog.w(TAG, "디코드 루프 idle 한도 도달 (partial ${chunks.size} chunks)")
         }
 
         val total = chunks.sumOf { it.size }
@@ -422,7 +422,7 @@ object AudioDecoder {
         }
         val actualStart = if (decodedStartUs >= 0L) decodedStartUs else startUs
         val actualEnd = if (decodedEndUs >= 0L) decodedEndUs else actualStart
-        Log.d(
+        AppLog.d(
             TAG,
             "decodeToPcmRange: shorts=${result.size}, rate=$sampleRate, ch=$channels, " +
                 "actual=$actualStart~$actualEnd, requested=$startUs~$endUs"
@@ -572,7 +572,7 @@ object AudioDecoder {
             val paddedSize = chunkSize + (chunkSize and 1L)
             val nextOffset = payloadOffset + paddedSize
             if (nextOffset < payloadOffset || nextOffset > fileLength) {
-                Log.w(TAG, "손상된 WAV chunk: id=$id size=$chunkSize")
+                AppLog.w(TAG, "손상된 WAV chunk: id=$id size=$chunkSize")
                 return null
             }
 

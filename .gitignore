@@ -27,5 +27,11 @@ stt_*.log
 /*_전사_전체.txt
 /*_전사텍스트.txt
 
+# 로컬 실기기 백업·검증 증거 (체크포인트 원문/개인정보 포함 가능)
+/local-evidence/
+
+# scripts/setup_whisper.sh가 고정 commit으로 준비하는 로컬 네이티브 소스
+/third_party/whisper.cpp/
+
 # 프로젝트에 포함하지 않는 로컬 중첩 저장소
 /STT 데모/

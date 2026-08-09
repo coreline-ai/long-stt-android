@@ -3,21 +3,23 @@ package com.stt.benchmark.data
 import android.content.Context
 import android.os.Build
 import android.util.AtomicFile
-import android.util.Log
+import com.stt.benchmark.core.AppLog
 import com.stt.benchmark.whisper.TranscriptionResult
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 class BenchmarkRecorder(private val context: Context) {
 
     companion object {
         private const val TAG = "BenchmarkRecorder"
-        private const val FILENAME = "stt_benchmark_results.csv"
-        private const val CSV_HEADER =
-            "timestamp,device,android_version,cpu_cores,engine,model,audio_file," +
-            "audio_duration_ms,elapsed_ms,rtf,speed_multiplier,segments,chars,note,text"
+        private const val LEGACY_FILENAME = "stt_benchmark_results.csv"
+        private const val FILENAME_V2 = "stt_benchmark_results_v2.csv"
+        private const val CSV_HEADER_V2 =
+            "schema_version,session_id,timestamp,device,android_version,cpu_cores,engine,model,audio_file," +
+                "audio_duration_ms,elapsed_ms,rtf,speed_multiplier,segments,chars,note"
     }
 
     data class DeviceInfo(
@@ -33,6 +35,7 @@ class BenchmarkRecorder(private val context: Context) {
     }
 
     data class BenchmarkRecord(
+        val sessionId: String = "",
         val timestamp: String = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.KOREA).format(Date()),
         val device: DeviceInfo = DeviceInfo(),
         val engineName: String,
@@ -50,44 +53,25 @@ class BenchmarkRecorder(private val context: Context) {
 
     /** CSV에서 모든 레코드 로드 */
     fun loadAll(): List<BenchmarkRecord> {
-        val csvFile = File(context.filesDir, FILENAME)
-        if (!csvFile.exists()) return emptyList()
-        return try {
-            csvFile.readLines().drop(1).mapNotNull { parseLine(it) }
-        } catch (e: Exception) {
-            Log.e(TAG, "CSV 로드 실패", e)
-            emptyList()
-        }
+        val legacy = readCsv(File(context.filesDir, LEGACY_FILENAME))
+            ?.lineSequence()
+            ?.drop(1)
+            ?.mapNotNull(::parseLegacyLine)
+            ?.toList()
+            .orEmpty()
+        val current = readCsv(File(context.filesDir, FILENAME_V2))
+            ?.lineSequence()
+            ?.drop(1)
+            ?.mapNotNull(::parseV2Line)
+            ?.toList()
+            .orEmpty()
+        return (legacy + current).sortedByDescending { it.timestamp }
     }
 
-    /** CSV 라인 파싱 (마지막 text 컬럼은 quoted) */
-    private fun parseLine(line: String): BenchmarkRecord? {
+    /** v1 CSV 라인 파싱 (마지막 text 컬럼은 quoted). */
+    private fun parseLegacyLine(line: String): BenchmarkRecord? {
         return try {
-            val parts = mutableListOf<String>()
-            val current = StringBuilder()
-            var inQuotes = false
-            var index = 0
-            while (index < line.length) {
-                val ch = line[index]
-                if (inQuotes) {
-                    if (ch == '"' && index + 1 < line.length && line[index + 1] == '"') {
-                        current.append('"')
-                        index += 2
-                        continue
-                    }
-                    if (ch == '"') inQuotes = false else current.append(ch)
-                } else when (ch) {
-                    '"' -> inQuotes = true
-                    ',' -> {
-                        parts.add(current.toString())
-                        current.setLength(0)
-                    }
-                    else -> current.append(ch)
-                }
-                index++
-            }
-            if (inQuotes) return null
-            parts.add(current.toString())
+            val parts = parseCsvColumns(line) ?: return null
             if (parts.size < 15) return null
             BenchmarkRecord(
                 timestamp = parts[0],
@@ -106,14 +90,70 @@ class BenchmarkRecorder(private val context: Context) {
         } catch (e: Exception) { null }
     }
 
+    /** v2는 stable sessionId와 성능 지표만 저장하고 transcript 원문을 포함하지 않는다. */
+    private fun parseV2Line(line: String): BenchmarkRecord? {
+        return try {
+            val parts = parseCsvColumns(line) ?: return null
+            if (parts.size < 16 || parts[0] != "2") return null
+            BenchmarkRecord(
+                sessionId = parts[1],
+                timestamp = parts[2],
+                engineName = parts[6],
+                modelName = parts[7],
+                audioFile = parts[8],
+                audioDurationMs = parts[9].toLongOrNull() ?: 0L,
+                elapsedMs = parts[10].toLongOrNull() ?: 0L,
+                rtf = parts[11].toFloatOrNull() ?: 0f,
+                speedMultiplier = parts[12].toFloatOrNull() ?: 0f,
+                segmentCount = parts[13].toIntOrNull() ?: 0,
+                charCount = parts[14].toIntOrNull() ?: 0,
+                note = parts[15],
+                text = ""
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun parseCsvColumns(line: String): List<String>? {
+        val parts = mutableListOf<String>()
+        val current = StringBuilder()
+        var inQuotes = false
+        var index = 0
+        while (index < line.length) {
+            val ch = line[index]
+            if (inQuotes) {
+                if (ch == '"' && index + 1 < line.length && line[index + 1] == '"') {
+                    current.append('"')
+                    index += 2
+                    continue
+                }
+                if (ch == '"') inQuotes = false else current.append(ch)
+            } else when (ch) {
+                '"' -> inQuotes = true
+                ',' -> {
+                    parts.add(current.toString())
+                    current.setLength(0)
+                }
+                else -> current.append(ch)
+            }
+            index++
+        }
+        if (inQuotes) return null
+        parts.add(current.toString())
+        return parts
+    }
+
     @Synchronized
     fun appendResult(
         result: TranscriptionResult,
         audioFile: String,
         modelName: String,
-        note: String = ""
+        note: String = "",
+        sessionId: String = ""
     ): BenchmarkRecord {
         val record = BenchmarkRecord(
+            sessionId = sessionId.ifBlank { "legacy_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}" },
             engineName = result.engineName,
             modelName = modelName,
             audioFile = File(audioFile).name,
@@ -124,16 +164,16 @@ class BenchmarkRecorder(private val context: Context) {
             segmentCount = result.segments.size,
             charCount = result.text.length,
             note = note,
-            text = result.text
+            text = ""
         )
-        val csvFile = File(context.filesDir, FILENAME)
+        val csvFile = File(context.filesDir, FILENAME_V2)
         csvFile.parentFile?.mkdirs()
-        val isNew = !csvFile.exists()
-        val previous = if (isNew) "" else csvFile.readText(Charsets.UTF_8)
+        val previous = readCsv(csvFile).orEmpty()
+        val isNew = previous.isBlank()
         val next = buildString {
-            if (isNew) appendLine(CSV_HEADER) else append(previous)
+            if (isNew) appendLine(CSV_HEADER_V2) else append(previous)
             if (isNotEmpty() && last() != '\n') append('\n')
-            appendLine(toCsvLine(record))
+            appendLine(toCsvLineV2(record))
         }
         val atomic = AtomicFile(csvFile)
         var output: java.io.FileOutputStream? = null
@@ -145,33 +185,29 @@ class BenchmarkRecorder(private val context: Context) {
             output?.let { atomic.failWrite(it) }
             throw error
         }
-        Log.i(TAG, "결과 저장: ${csvFile.absolutePath}")
+        AppLog.i(TAG, "결과 저장: ${csvFile.absolutePath}")
         return record
     }
 
     /**
-     * session JSON을 삭제할 때 같은 완료 전사의 CSV 텍스트도 함께 제거한다.
-     * 과거 CSV 형식에는 sessionId가 없으므로 오디오·모델·note·전체 텍스트가 모두 일치하는
-     * 가장 최근 한 행만 지운다. 다른 원시 CSV 행은 재직렬화하지 않아 보존된다.
+     * v2는 sessionId로 삭제한다. v1에는 sessionId가 없으므로 이전 형식에 한해
+     * 오디오·모델·note·전체 텍스트가 일치하는 가장 최근 한 행을 삭제한다.
      */
     @Synchronized
     fun deleteMatchingResult(
+        sessionId: String,
         audioFile: String,
         modelName: String,
         note: String,
         text: String
     ): Boolean {
-        val csvFile = File(context.filesDir, FILENAME)
-        if (!csvFile.exists()) return false
-        val lines = try {
-            csvFile.readLines(Charsets.UTF_8).toMutableList()
-        } catch (error: Exception) {
-            Log.e(TAG, "CSV 삭제 대상 조회 실패", error)
-            return false
-        }
+        if (sessionId.isNotBlank() && deleteV2BySessionId(sessionId)) return true
+
+        val csvFile = File(context.filesDir, LEGACY_FILENAME)
+        val lines = readCsv(csvFile)?.lines()?.toMutableList() ?: return false
         val targetIndex = lines.indices.reversed().firstOrNull { index ->
             if (index == 0) return@firstOrNull false
-            val record = parseLine(lines[index]) ?: return@firstOrNull false
+            val record = parseLegacyLine(lines[index]) ?: return@firstOrNull false
             record.audioFile == File(audioFile).name &&
                 record.modelName == modelName &&
                 record.note == note &&
@@ -189,14 +225,26 @@ class BenchmarkRecorder(private val context: Context) {
             true
         } catch (error: Exception) {
             output?.let { atomic.failWrite(it) }
-            Log.e(TAG, "CSV 결과 삭제 실패", error)
+            AppLog.e(TAG, "CSV 결과 삭제 실패", error)
             false
         }
     }
 
-    private fun toCsvLine(r: BenchmarkRecord): String {
+    private fun deleteV2BySessionId(sessionId: String): Boolean {
+        val csvFile = File(context.filesDir, FILENAME_V2)
+        val lines = readCsv(csvFile)?.lines()?.toMutableList() ?: return false
+        val targetIndex = lines.indices.reversed().firstOrNull { index ->
+            index > 0 && parseV2Line(lines[index])?.sessionId == sessionId
+        } ?: return false
+        lines.removeAt(targetIndex)
+        return writeCsv(csvFile, lines.joinToString(separator = "\n", postfix = "\n"))
+    }
+
+    private fun toCsvLineV2(r: BenchmarkRecord): String {
         val safe = { s: String -> "\"${s.replace("\"", "\"\"").replace(Regex("[\\r\\n]+"), " ")}\"" }
         return listOf(
+            "2",
+            safe(r.sessionId),
             r.timestamp,
             "${r.device.manufacturer}/${r.device.model}",
             r.device.androidVersion,
@@ -210,9 +258,32 @@ class BenchmarkRecorder(private val context: Context) {
             "%.2f".format(Locale.US, r.speedMultiplier),
             r.segmentCount.toString(),
             r.charCount.toString(),
-            safe(r.note),
-            safe(r.text)
+            safe(r.note)
         ).joinToString(",")
+    }
+
+    private fun readCsv(file: File): String? = try {
+        AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+    } catch (_: java.io.FileNotFoundException) {
+        null
+    } catch (error: Exception) {
+        AppLog.e(TAG, "CSV 로드 실패: ${file.name}", error)
+        null
+    }
+
+    private fun writeCsv(file: File, content: String): Boolean {
+        val atomic = AtomicFile(file)
+        var output: java.io.FileOutputStream? = null
+        return try {
+            output = atomic.startWrite()
+            output.write(content.toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(output)
+            true
+        } catch (error: Exception) {
+            output?.let { atomic.failWrite(it) }
+            AppLog.e(TAG, "CSV 저장 실패: ${file.name}", error)
+            false
+        }
     }
 
     fun formatReport(record: BenchmarkRecord): String = buildString {

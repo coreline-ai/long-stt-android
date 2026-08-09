@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Bundle
-import android.util.Log
+import com.stt.benchmark.core.AppLog
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -14,14 +14,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.stt.benchmark.ui.SttBenchmarkScreen
+import com.stt.benchmark.summary.CodexAuthViewModel
+import com.stt.benchmark.ui.LongSttApp
 import com.stt.benchmark.ui.SttViewModel
 import com.stt.benchmark.ui.theme.SttBenchmarkTheme
+import com.stt.benchmark.ui.transcription.TranscriptionRoute
+import com.stt.benchmark.ui.transcription.DebugTranscriptionRequest
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
     private var viewModel: SttViewModel? = null
+    private var automationReceiverRegistered = false
 
     /**
      * adb에서 전사 트리거용 BroadcastReceiver
@@ -48,21 +52,26 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // broadcast 등록
-        ContextCompat.registerReceiver(
-            this,
-            sttReceiver,
-            IntentFilter("com.stt.benchmark.RUN_STT"),
-            ContextCompat.RECEIVER_EXPORTED
-        )
+        // 외부 adb 자동화 surface는 debug APK에만 노출한다.
+        if (BuildConfig.DEBUG) {
+            ContextCompat.registerReceiver(
+                this,
+                sttReceiver,
+                IntentFilter("com.stt.benchmark.RUN_STT"),
+                ContextCompat.RECEIVER_EXPORTED
+            )
+            automationReceiverRegistered = true
+        }
 
         // Intent extra로 자동 전사 모드 (adb에서 프로세스 재시작으로 호출)
         intent?.let { i ->
-            val autoModel = i.getStringExtra("auto_model")
-            val autoAudio = i.getStringExtra("auto_audio")
-            val autoNote = i.getStringExtra("auto_note") ?: ""
-            if (!autoModel.isNullOrEmpty() && !autoAudio.isNullOrEmpty()) {
-                Log.i(TAG, "자동 전사 모드: $autoNote")
+            DebugTranscriptionRequest.create(
+                enabled = BuildConfig.DEBUG,
+                modelPath = i.getStringExtra("auto_model"),
+                audioPath = i.getStringExtra("auto_audio"),
+                note = i.getStringExtra("auto_note"),
+            )?.let { request ->
+                AppLog.i(TAG, "자동 전사 모드: ${request.note}")
                 setContent {
                     SttBenchmarkTheme {
                         Surface(color = MaterialTheme.colorScheme.background) {
@@ -71,9 +80,12 @@ class MainActivity : ComponentActivity() {
                             // 화면 표시 후 자동 실행
                             LaunchedEffect(Unit) {
                                 delay(500)
-                                vm.loadAndTranscribe(autoModel, autoAudio, autoNote)
+                                vm.loadAndTranscribe(request.modelPath, request.audioPath, request.note)
                             }
-                            SttBenchmarkScreen(viewModel = vm)
+                            TranscriptionRoute(
+                                viewModel = vm,
+                                onOpenSettings = {},
+                            )
                         }
                     }
                 }
@@ -82,13 +94,13 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            SttBenchmarkTheme {
-                Surface(color = MaterialTheme.colorScheme.background) {
-                    val vm: SttViewModel = viewModel()
-                    viewModel = vm
-                    SttBenchmarkScreen(viewModel = vm)
-                }
-            }
+            val vm: SttViewModel = viewModel()
+            val codexAuthViewModel: CodexAuthViewModel = viewModel()
+            viewModel = vm
+            LongSttApp(
+                sttViewModel = vm,
+                codexAuthViewModel = codexAuthViewModel,
+            )
         }
     }
 
@@ -96,18 +108,23 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val autoModel = intent.getStringExtra("auto_model")
-        val autoAudio = intent.getStringExtra("auto_audio")
-        val autoNote = intent.getStringExtra("auto_note") ?: ""
-        if (!autoModel.isNullOrEmpty() && !autoAudio.isNullOrEmpty()) {
-            Log.i(TAG, "기존 화면에서 자동 전사 재요청: $autoNote")
-            viewModel?.loadAndTranscribe(autoModel, autoAudio, autoNote)
+        DebugTranscriptionRequest.create(
+            enabled = BuildConfig.DEBUG,
+            modelPath = intent.getStringExtra("auto_model"),
+            audioPath = intent.getStringExtra("auto_audio"),
+            note = intent.getStringExtra("auto_note"),
+        )?.let { request ->
+            AppLog.i(TAG, "기존 화면에서 자동 전사 재요청: ${request.note}")
+            viewModel?.loadAndTranscribe(request.modelPath, request.audioPath, request.note)
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try { unregisterReceiver(sttReceiver) } catch (_: Exception) {}
+        if (automationReceiverRegistered) {
+            try { unregisterReceiver(sttReceiver) } catch (_: Exception) {}
+            automationReceiverRegistered = false
+        }
     }
 
     companion object {

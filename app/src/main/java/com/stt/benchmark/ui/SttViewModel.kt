@@ -6,29 +6,24 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
-import android.util.Log
+import com.stt.benchmark.core.AppLog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.stt.benchmark.data.BenchmarkRecorder
 import com.stt.benchmark.data.MediaLibraryStore
 import com.stt.benchmark.data.ModelDownloader
+import com.stt.benchmark.data.RecordingTranscriptionGroupStore
 import com.stt.benchmark.data.TranscriptionSessionStore
+import com.stt.benchmark.recording.RecordingTranscriptionCoordinator
 import com.stt.benchmark.service.TranscriptionService
 import com.stt.benchmark.whisper.AudioDecoder
-import com.stt.benchmark.whisper.ChunkCoverage
-import com.stt.benchmark.whisper.TranscriptSegment
 import com.stt.benchmark.whisper.TranscriptionResult
-import com.stt.benchmark.whisper.WhisperCppEngine
-import com.stt.benchmark.whisper.WhisperEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,11 +37,12 @@ import java.util.UUID
 
 class SttViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val whisperEngine: WhisperEngine = WhisperCppEngine(app)
     private val recorder = BenchmarkRecorder(app)
     private val modelDownloader = ModelDownloader(app)
     private val sessionStore = TranscriptionSessionStore(app)
     private val mediaLibraryStore = MediaLibraryStore(app)
+    private val recordingGroupStore = RecordingTranscriptionGroupStore(app)
+    private val recordingCoordinator = RecordingTranscriptionCoordinator(app)
 
     /** 사용 가능한 모델 목록 */
     val availableModels: List<ModelDownloader.ModelInfo> get() = ModelDownloader.MODELS
@@ -76,6 +72,8 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         val resultSessions: List<TranscriptionSessionStore.Checkpoint> = emptyList(),
         /** 앱 내부로 가져온 오디오의 영구 목록 */
         val audioLibrary: List<MediaLibraryStore.AudioEntry> = emptyList(),
+        /** 직접 녹음 한 세션과 ordered child STT 결과를 묶은 부모 보관함. */
+        val recordingGroups: List<RecordingTranscriptionGroupStore.Group> = emptyList(),
         /** 새 models/ 폴더와 이전 루트 모델을 함께 보여주는 설치 목록 */
         val installedModels: List<MediaLibraryStore.ModelEntry> = emptyList(),
         val isDownloading: Boolean = false,
@@ -101,9 +99,6 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
     private val sessionMutex = Mutex()
     private var activeSession: Job? = null
 
-    @Volatile
-    private var releaseWhenIdle = false
-
     private val serviceStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != TranscriptionService.ACTION_STATUS) return
@@ -113,7 +108,9 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                 progress = intent.getFloatExtra(TranscriptionService.EXTRA_PROGRESS, 0f),
                 currentChunk = intent.getIntExtra(TranscriptionService.EXTRA_CURRENT_CHUNK, 0),
                 totalChunks = intent.getIntExtra(TranscriptionService.EXTRA_TOTAL_CHUNKS, 0),
-                detail = intent.getStringExtra(TranscriptionService.EXTRA_DETAIL).orEmpty()
+                detail = intent.getStringExtra(TranscriptionService.EXTRA_DETAIL).orEmpty(),
+                recordingGroupId = intent.getStringExtra(TranscriptionService.EXTRA_RECORDING_GROUP_ID).orEmpty(),
+                mediaId = intent.getStringExtra(TranscriptionService.EXTRA_MEDIA_ID).orEmpty(),
             )
         }
     }
@@ -128,7 +125,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         loadHistory()
         loadResultLibrary()
         loadMediaLibrary()
-        resumeIncompleteServiceSession()
+        restoreIncompleteServiceSession()
     }
 
     private fun loadHistory() {
@@ -140,8 +137,10 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadResultLibrary() {
         viewModelScope.launch {
-            val sessions = withContext(Dispatchers.IO) { sessionStore.listAll() }
-            _uiState.update { it.copy(resultSessions = sessions) }
+            val (sessions, groups) = withContext(Dispatchers.IO) {
+                sessionStore.listAll() to recordingGroupStore.listAll()
+            }
+            _uiState.update { it.copy(resultSessions = sessions, recordingGroups = groups) }
         }
     }
 
@@ -203,26 +202,38 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun resumeIncompleteServiceSession() {
+    /** route 재진입 시 다른 foreground service가 저장한 녹음/결과 인덱스를 다시 읽는다. */
+    fun refreshLibraries() {
+        loadMediaLibrary()
+        loadResultLibrary()
+    }
+
+    /**
+     * 미완료 checkpoint가 있으면 Service에 현재 실행 여부를 질의한다.
+     * 살아 있는 Service는 snapshot을 회신하고, 새 Service는 RUNNING 계열을 INTERRUPTED로 조정한 뒤 종료한다.
+     */
+    private fun restoreIncompleteServiceSession() {
         viewModelScope.launch {
             val checkpoint = withContext(Dispatchers.IO) { sessionStore.latestIncomplete() } ?: return@launch
+            val modelReadable = isManagedReadableFile(checkpoint.modelPath)
+            val audioReadable = isManagedReadableFile(checkpoint.audioPath)
             _uiState.update {
                 it.copy(
                     state = SttState.RUNNING,
-                    modelLoaded = true,
+                    modelLoaded = modelReadable,
                     modelPath = checkpoint.modelPath,
                     audioPath = checkpoint.audioPath,
                     progress = checkpoint.progress,
                     totalFiles = 1,
                     currentFileIndex = 0,
-                    batchStatus = "중단된 전사를 재개하는 중..."
+                    batchStatus = "이전 전사의 실행 상태를 확인하는 중...",
+                    errorMessage = if (modelReadable && audioReadable) "" else "재개 입력 파일을 확인하세요"
                 )
             }
             ContextCompat.startForegroundService(
                 getApplication<Application>(),
                 Intent(getApplication(), TranscriptionService::class.java).apply {
-                    action = TranscriptionService.ACTION_RESUME
-                    putExtra(TranscriptionService.EXTRA_SESSION_ID, checkpoint.sessionId)
+                    action = TranscriptionService.ACTION_QUERY
                 }
             )
         }
@@ -234,9 +245,22 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         progress: Float,
         currentChunk: Int,
         totalChunks: Int,
-        detail: String
+        detail: String,
+        recordingGroupId: String,
+        mediaId: String,
     ) {
         val status = runCatching { TranscriptionSessionStore.Status.valueOf(statusName) }.getOrNull() ?: return
+        if (recordingGroupId.isNotBlank() && mediaId.isNotBlank()) {
+            onRecordingGroupServiceStatus(
+                sessionId = sessionId,
+                recordingGroupId = recordingGroupId,
+                mediaId = mediaId,
+                status = status,
+                childProgress = progress,
+                detail = detail,
+            )
+            return
+        }
         when (status) {
             TranscriptionSessionStore.Status.PREPARING,
             TranscriptionSessionStore.Status.RUNNING,
@@ -254,8 +278,9 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                 val checkpoint = withContext(Dispatchers.IO) { sessionStore.load(sessionId) }
                 val records = withContext(Dispatchers.IO) { recorder.loadAll() }
                 val record = checkpoint?.let { completed ->
-                    records.firstOrNull {
-                        it.audioFile == File(completed.audioPath).name && it.note == completed.note
+                    records.firstOrNull { it.sessionId == completed.sessionId } ?: records.firstOrNull {
+                        it.sessionId.isBlank() &&
+                            it.audioFile == File(completed.audioPath).name && it.note == completed.note
                     }
                 }
                 _uiState.update {
@@ -293,6 +318,87 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun onRecordingGroupServiceStatus(
+        sessionId: String,
+        recordingGroupId: String,
+        mediaId: String,
+        status: TranscriptionSessionStore.Status,
+        childProgress: Float,
+        detail: String,
+    ) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                recordingCoordinator.onChildEvent(
+                    RecordingTranscriptionCoordinator.ChildEvent(
+                        groupId = recordingGroupId,
+                        mediaId = mediaId,
+                        sttSessionId = sessionId,
+                        status = status,
+                        detail = detail,
+                    )
+                )
+            }
+            if (result !is RecordingTranscriptionCoordinator.EventResult.Updated) return@launch
+            var group = result.group
+            if (result.launchNext) {
+                // Android 14+에서는 background broadcast receiver/ViewModel이 새 microphone/dataSync
+                // foreground service를 시작할 수 없다. The terminal service claims and launches the
+                // next child before it publishes this event, so the UI only reloads that checkpoint.
+                group = withContext(Dispatchers.IO) {
+                    recordingGroupStore.load(group.groupId) ?: group
+                }
+            }
+            val groups = withContext(Dispatchers.IO) { recordingGroupStore.listAll() }
+            val overallProgress = if (group.children.isEmpty()) {
+                0f
+            } else {
+                ((group.completedChildren + if (!group.isTerminal) childProgress.coerceIn(0f, 1f) else 0f) /
+                    group.children.size.toFloat()).coerceIn(0f, 1f)
+            }
+            _uiState.update { current ->
+                current.copy(
+                    state = when (group.status) {
+                        RecordingTranscriptionGroupStore.GroupStatus.COMPLETED,
+                        RecordingTranscriptionGroupStore.GroupStatus.PARTIAL_COMPLETED,
+                        -> SttState.DONE
+                        RecordingTranscriptionGroupStore.GroupStatus.FAILED,
+                        RecordingTranscriptionGroupStore.GroupStatus.MODEL_REQUIRED,
+                        -> SttState.ERROR
+                        RecordingTranscriptionGroupStore.GroupStatus.CANCELLED,
+                        RecordingTranscriptionGroupStore.GroupStatus.INTERRUPTED,
+                        -> if (current.modelLoaded) SttState.READY else SttState.IDLE
+                        else -> SttState.RUNNING
+                    },
+                    progress = overallProgress,
+                    totalFiles = group.children.size,
+                    currentFileIndex = group.currentChildIndex,
+                    batchStatus = groupStatusText(group, detail),
+                    errorMessage = if (group.status in setOf(
+                            RecordingTranscriptionGroupStore.GroupStatus.FAILED,
+                            RecordingTranscriptionGroupStore.GroupStatus.MODEL_REQUIRED,
+                        )
+                    ) group.errorMessage else "",
+                    recordingGroups = groups,
+                )
+            }
+            if (group.isTerminal) {
+                loadResultLibrary()
+                loadHistory()
+            }
+        }
+    }
+
+    private fun groupStatusText(group: RecordingTranscriptionGroupStore.Group, detail: String): String = when (group.status) {
+        RecordingTranscriptionGroupStore.GroupStatus.COMPLETED -> "녹음 전체 ${group.children.size}개 순차 전사 완료"
+        RecordingTranscriptionGroupStore.GroupStatus.PARTIAL_COMPLETED ->
+            "보존 청크 ${group.children.size}개 전사 완료 · 제외 ${group.excludedSequences.size}개"
+        RecordingTranscriptionGroupStore.GroupStatus.FAILED -> group.errorMessage.ifBlank { "녹음 그룹 전사 실패" }
+        RecordingTranscriptionGroupStore.GroupStatus.CANCELLED -> "녹음 그룹 전사 취소"
+        RecordingTranscriptionGroupStore.GroupStatus.INTERRUPTED -> "녹음 그룹 전사 재개 확인 필요"
+        RecordingTranscriptionGroupStore.GroupStatus.MODEL_REQUIRED -> "전사 모델 설치 또는 선택 필요"
+        else -> "${group.currentChildIndex + 1}/${group.children.size} 녹음 청크 · ${detail.ifBlank { "전사 중" }}"
+    }
+
     private fun startForegroundTranscription(modelPath: String, audioPath: String, note: String) {
         if (!isManagedReadableFile(modelPath) || !isManagedReadableFile(audioPath)) {
             _uiState.update {
@@ -311,8 +417,6 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         viewModelScope.launch {
-            // UI에서 미리 로드한 context가 남아 있으면 서비스의 모델 로드 전에 해제한다.
-            withContext(Dispatchers.IO) { whisperEngine.release() }
             ContextCompat.startForegroundService(
                 getApplication<Application>(),
                 Intent(getApplication(), TranscriptionService::class.java).apply {
@@ -345,7 +449,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 sessionMutex.withLock { block() }
             } catch (cancelled: CancellationException) {
-                Log.i("SttViewModel", "세션 취소: $name")
+                AppLog.i("SttViewModel", "세션 취소: $name")
                 _uiState.update {
                     it.copy(
                         state = if (it.modelLoaded) SttState.READY else SttState.IDLE,
@@ -355,9 +459,6 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 throw cancelled
             } finally {
-                if (releaseWhenIdle) {
-                    withContext(NonCancellable + Dispatchers.IO) { whisperEngine.release() }
-                }
                 if (activeSession === currentCoroutineContext()[Job]) {
                     activeSession = null
                 }
@@ -397,8 +498,8 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         }
         launchExclusiveSession("모델을 변경") {
             _uiState.update { it.copy(state = SttState.LOADING_MODEL) }
-            val ok = withContext(Dispatchers.IO) { whisperEngine.loadModel(path) }
-            if (ok && isManagedReadableFile(path)) {
+            val ok = isManagedReadableFile(path) && File(path).extension.equals("bin", ignoreCase = true)
+            if (ok) {
                 withContext(Dispatchers.IO) { mediaLibraryStore.selectModel(path) }
             }
             _uiState.update {
@@ -503,11 +604,11 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
             if (pendingFile.length() <= 0L || !pendingFile.renameTo(destFile)) {
                 throw IllegalStateException("오디오 임시 파일을 완료 파일로 변경하지 못했습니다")
             }
-            Log.i("SttViewModel", "복사 완료: ${destFile.name} (${destFile.length() / 1024 / 1024}MB)")
+            AppLog.i("SttViewModel", "복사 완료: ${destFile.name} (${destFile.length() / 1024 / 1024}MB)")
             CopiedAudio(destFile.absolutePath, sourceName)
         } catch (error: Exception) {
             tempFile?.delete()
-            Log.e("SttViewModel", "복사 실패: $uri", error)
+            AppLog.e("SttViewModel", "복사 실패: $uri", error)
             null
         }
     }
@@ -563,11 +664,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /**
-     * 다중 파일 배치 전사.
-     * 각 파일은 transcribeSmart(10분 청크 분할 포함)로 처리하고,
-     * 파일 간 10초 대기(발열 대응) 후 CSV에 개별 저장.
-     */
+    /** 모든 생산 전사는 checkpoint를 갖는 Foreground Service 단일 경로로 실행한다. */
     fun runBatchBenchmark() {
         val current = _uiState.value
         if (rejectIfSessionBusy("새 전사를 시작")) return
@@ -580,122 +677,82 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        // SAF 선택은 단일 파일도 audioPaths에 넣는다. 6시간급 단일 파일은 반드시
-        // 화면과 분리된 Foreground Service 경로로 실행한다.
-        if (current.audioPaths.size == 1) {
-            startForegroundTranscription(current.modelPath, current.audioPaths.first(), "")
+        batchInputError(current.audioPaths)?.let { message ->
+            _uiState.update {
+                it.copy(
+                    state = SttState.ERROR,
+                    errorMessage = message,
+                )
+            }
             return
         }
+        startForegroundTranscription(current.modelPath, current.audioPaths.single(), "")
+    }
 
-        launchExclusiveSession("새 전사를 시작") {
-            val files = current.audioPaths
-            val modelPath = current.modelPath
-            var lastSuccess: TranscriptionResult? = null
-            var lastReport = ""
-            var successCount = 0
-            var failCount = 0
-
-            _uiState.update {
-                it.copy(
-                    state = SttState.RUNNING,
-                    progress = 0f,
-                    totalFiles = files.size,
-                    currentFileIndex = 0,
-                    errorMessage = "",
-                    lastReport = "",
-                    result = null,
-                    batchStatus = "파일 1/${files.size} 전사 중..."
-                )
-            }
-
-            files.forEachIndexed { index, audioPath ->
-                _uiState.update {
-                    it.copy(
-                        currentFileIndex = index,
-                        audioPath = audioPath,
-                        progress = 0.05f,
-                        batchStatus = "파일 ${index + 1}/${files.size} 전사 중..."
-                    )
-                }
-
-                Log.i(
-                    "SttViewModel",
-                    "═══ 파일 ${index + 1}/${files.size}: ${File(audioPath).name} ═══"
-                )
-
-                val result = try {
-                    Result.success(withContext(Dispatchers.Default) {
-                        transcribeSmart(audioPath, modelPath)
-                    })
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Throwable) {
-                    Result.failure(error)
-                }
-
-                result
-                    .onSuccess { res ->
-                        successCount++
-                        val modelName = modelPath.substringAfterLast("/")
-                        val record = withContext(Dispatchers.IO) {
-                            recorder.appendResult(
-                                result = res,
-                                audioFile = audioPath,
-                                modelName = modelName,
-                                note = "배치${index + 1}/${files.size}"
-                            )
-                        }
-                        lastSuccess = res
-                        lastReport = recorder.formatReport(record)
-                        Log.i(
-                            "SttViewModel",
-                            "파일 ${index + 1} 완료: ${res.text.length}자, RTF=${res.rtf}"
+    /** 최근 직접 녹음을 READY sequence 순서로 기존 단일 파일 Service에 전달한다. */
+    fun startRecordingGroupTranscription(recordingSessionId: String, allowPartial: Boolean) {
+        if (rejectIfSessionBusy("녹음 그룹 전사를 시작")) return
+        val current = _uiState.value
+        val modelPath = current.modelPath.ifBlank { mediaLibraryStore.selectedModelPath() }
+        _uiState.update {
+            it.copy(
+                state = SttState.RUNNING,
+                progress = 0f,
+                currentFileIndex = 0,
+                batchStatus = "녹음 청크 무결성을 확인하는 중...",
+                errorMessage = "",
+            )
+        }
+        viewModelScope.launch {
+            when (val result = withContext(Dispatchers.IO) {
+                recordingCoordinator.start(recordingSessionId, modelPath, allowPartial)
+            }) {
+                is RecordingTranscriptionCoordinator.StartResult.Started -> {
+                    val group = result.group
+                    _uiState.update {
+                        it.copy(
+                            state = SttState.RUNNING,
+                            modelLoaded = true,
+                            modelPath = group.modelPath,
+                            progress = 0f,
+                            totalFiles = group.children.size,
+                            currentFileIndex = 0,
+                            batchStatus = "1/${group.children.size} 녹음 청크 전사 시작",
+                            recordingGroups = listOf(group) + it.recordingGroups.filterNot { old -> old.groupId == group.groupId },
+                            errorMessage = "",
                         )
-                        _uiState.update {
-                            it.copy(
-                                progress = 1f,
-                                result = res,
-                                lastReport = lastReport
-                            )
-                        }
                     }
-                    .onFailure { e ->
-                        failCount++
-                        Log.e("SttViewModel", "파일 ${index + 1} 실패: ${e.message}", e)
-                        _uiState.update {
-                            it.copy(
-                                progress = 1f,
-                                errorMessage = "파일 ${index + 1} 실패: ${e.message}"
-                            )
-                        }
-                    }
-
-                // 파일 간 발열 대기 (마지막 파일 제외)
-                if (index < files.size - 1) {
-                    _uiState.update { it.copy(batchStatus = "냉각 대기 중... (10초)") }
-                    delay(10_000)
+                    loadMediaLibrary()
                 }
-            }
-
-            val summary = buildString {
-                append("전체 완료 (${successCount}성공")
-                if (failCount > 0) append("/${failCount}실패")
-                append(", ${files.size}개 파일)")
-            }
-            _uiState.update {
-                it.copy(
-                    state = if (successCount > 0) SttState.DONE else SttState.ERROR,
-                    progress = 1f,
-                    currentFileIndex = (files.size - 1).coerceAtLeast(0),
-                    batchStatus = summary,
-                    result = lastSuccess,
-                    lastReport = lastReport.ifBlank { it.lastReport },
-                    errorMessage = if (successCount == 0) {
-                        "배치 전사 실패 (모든 파일)"
-                    } else {
-                        ""
+                is RecordingTranscriptionCoordinator.StartResult.PartialConfirmationRequired -> {
+                    _uiState.update {
+                        it.copy(
+                            state = if (it.modelLoaded) SttState.READY else SttState.IDLE,
+                            batchStatus = "일부 보존 녹음은 범위 확인 뒤 시작할 수 있습니다.",
+                            errorMessage = "전사 제외 청크: ${result.excludedSequences.joinToString()}",
+                        )
                     }
-                )
+                }
+                is RecordingTranscriptionCoordinator.StartResult.ModelRequired -> {
+                    loadResultLibrary()
+                    _uiState.update {
+                        it.copy(
+                            state = SttState.ERROR,
+                            modelLoaded = false,
+                            batchStatus = "아래 모델 설치 또는 모델 변경에서 사용할 모델을 준비하세요.",
+                            errorMessage = result.group.errorMessage,
+                        )
+                    }
+                }
+                is RecordingTranscriptionCoordinator.StartResult.Blocked -> {
+                    _uiState.update {
+                        it.copy(
+                            state = if (it.modelLoaded) SttState.READY else SttState.IDLE,
+                            batchStatus = "",
+                            errorMessage = result.reason,
+                        )
+                    }
+                }
             }
         }
     }
@@ -753,6 +810,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                 val checkpointDeleted = sessionStore.delete(sessionId)
                 if (checkpointDeleted && checkpoint.status == TranscriptionSessionStore.Status.COMPLETED) {
                     recorder.deleteMatchingResult(
+                        sessionId = checkpoint.sessionId,
                         audioFile = checkpoint.audioPath,
                         modelName = File(checkpoint.modelPath).name,
                         note = checkpoint.note,
@@ -775,6 +833,53 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
             }
             loadHistory()
         }
+    }
+
+    /** 부모 그룹과 child 전사 결과만 삭제한다. 직접 녹음 원본/MediaLibrary 항목은 유지한다. */
+    fun deleteRecordingGroupResult(groupId: String) {
+        viewModelScope.launch {
+            val group = withContext(Dispatchers.IO) { recordingGroupStore.load(groupId) }
+            if (group == null) {
+                loadResultLibrary()
+                return@launch
+            }
+            if (!group.isTerminal || group.status == RecordingTranscriptionGroupStore.GroupStatus.INTERRUPTED) {
+                _uiState.update { it.copy(errorMessage = "진행 중이거나 재개 가능한 그룹 결과는 삭제할 수 없습니다") }
+                return@launch
+            }
+            val deleted = withContext(Dispatchers.IO) {
+                group.children.mapNotNull { child -> child.sttSessionId.takeIf { it.isNotBlank() } }
+                    .mapNotNull(sessionStore::load)
+                    .all { checkpoint -> deleteSessionArtifacts(checkpoint) } && recordingGroupStore.delete(groupId)
+            }
+            if (!deleted) {
+                _uiState.update { it.copy(errorMessage = "그룹 전사 결과를 모두 삭제하지 못했습니다") }
+                return@launch
+            }
+            _uiState.update { current ->
+                current.copy(
+                    recordingGroups = current.recordingGroups.filterNot { it.groupId == groupId },
+                    resultSessions = current.resultSessions.filterNot { session -> session.recordingGroupId == groupId },
+                    errorMessage = "",
+                )
+            }
+            loadHistory()
+        }
+    }
+
+    private fun deleteSessionArtifacts(checkpoint: TranscriptionSessionStore.Checkpoint): Boolean {
+        val result = checkpoint.toResult()
+        val deleted = sessionStore.delete(checkpoint.sessionId)
+        if (deleted && checkpoint.status == TranscriptionSessionStore.Status.COMPLETED) {
+            recorder.deleteMatchingResult(
+                sessionId = checkpoint.sessionId,
+                audioFile = checkpoint.audioPath,
+                modelName = File(checkpoint.modelPath).name,
+                note = checkpoint.note,
+                text = result.text,
+            )
+        }
+        return deleted
     }
 
     /** 보관함 항목만 제거한다. 파일과 기존 전사 결과는 보존한다. */
@@ -946,259 +1051,13 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         startForegroundTranscription(current.modelPath, current.audioPath, note)
     }
 
-    private suspend fun executeBenchmark(current: UiState, note: String) {
-        _uiState.update { it.copy(state = SttState.RUNNING, progress = 0f, errorMessage = "") }
-
-        try {
-            val res = withContext(Dispatchers.Default) {
-                transcribeSmart(current.audioPath, current.modelPath)
-            }
-            val modelName = current.modelPath.substringAfterLast("/")
-            val record = withContext(Dispatchers.IO) {
-                recorder.appendResult(
-                    result = res,
-                    audioFile = current.audioPath,
-                    modelName = modelName,
-                    note = note
-                )
-            }
-            val report = recorder.formatReport(record)
-            _uiState.update {
-                it.copy(state = SttState.DONE, progress = 1f, result = res, lastReport = report)
-            }
-            loadHistory()
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            Log.e("SttViewModel", "전사 실패", error)
-            _uiState.update {
-                it.copy(state = SttState.ERROR, errorMessage = "전사 실패: ${error.message}")
-            }
-        }
-    }
-
-    /**
-     * 오디오 길이에 따라 단일/시간-청크 전사 자동 선택.
-     * - 약 10분 이하: 단일 전사 (MediaCodec 전체 디코드 — wav/m4a/mp3)
-     * - 10분 초과: 10분 창 분할
-     *     - WAV → readWavRange
-     *     - M4A/MP3 등 → MediaCodec 구간 디코드 (decodeWindow)
-     */
-    private suspend fun transcribeSmart(audioPath: String, modelPath: String): TranscriptionResult {
-        val modelFile = File(modelPath)
-        val modelSizeLabel = if (modelFile.exists()) {
-            "${modelFile.length() / 1024 / 1024}MB"
-        } else {
-            modelFile.name
-        }
-
-        val durationMs = withContext(Dispatchers.IO) {
-            AudioDecoder.durationMs(audioPath)
-        } ?: throw IllegalStateException(
-            "오디오 길이를 확인할 수 없습니다. 장시간 파일은 전체 디코딩으로 실행하지 않습니다"
-        )
-
-        // 약 10분 이하 → 단일 전사. duration 조회 실패는 위에서 명시적으로 중단한다.
-        if (durationMs <= CHUNK_DURATION_MS + 1000L) {
-            Log.i("SttViewModel", "단일 전사 (duration=${durationMs}ms) path=$audioPath")
-            _uiState.update { it.copy(progress = 0.1f) }
-            val result = whisperEngine.transcribe(audioPath)
-            return result.copy(
-                audioDurationMs = durationMs,
-                chunkCoverage = listOf(
-                    ChunkCoverage(
-                        chunkIndex = 1,
-                        primaryStartMs = 0L,
-                        primaryEndMs = durationMs,
-                        decodedStartMs = 0L,
-                        decodedEndMs = result.audioDurationMs,
-                        decodedSamples = (result.audioDurationMs * 16L).toInt()
-                    )
-                )
-            )
-        }
-
-        // === 시간 청크 배치 (WAV / M4A / MP3) ===
-        val totalChunks = ((durationMs + CHUNK_DURATION_MS - 1) / CHUNK_DURATION_MS).toInt()
-        val formatHint = when {
-            AudioDecoder.isPcmWavFile(audioPath) -> "wav"
-            audioPath.endsWith(".m4a", true) || audioPath.endsWith(".mp4", true) -> "m4a"
-            audioPath.endsWith(".mp3", true) -> "mp3"
-            else -> "compressed"
-        }
-        Log.i(
-            "SttViewModel",
-            "시간 청크 전사 시작: ${durationMs}ms → ${totalChunks}개, format=$formatHint"
-        )
-
-        val allSegments = mutableListOf<TranscriptSegment>()
-        val textBuilder = StringBuilder()
-        val coverage = mutableListOf<ChunkCoverage>()
-        var chunkIndex = 0
-        var totalElapsedMs = 0L
-        var pos = 0L
-
-        while (pos < durationMs) {
-            currentCoroutineContext().ensureActive()
-            chunkIndex++
-            val chunkDuration = minOf(CHUNK_DURATION_MS, durationMs - pos)
-            val completedChunks = chunkIndex - 1
-            val progress = 0.1f + 0.85f * (completedChunks.toFloat() / totalChunks.toFloat())
-            _uiState.update {
-                it.copy(
-                    progress = progress.coerceIn(0f, 0.95f),
-                    batchStatus = if (it.totalFiles > 1) {
-                        it.batchStatus
-                    } else {
-                        "청크 $chunkIndex/$totalChunks 전사 중..."
-                    }
-                )
-            }
-            Log.i(
-                "SttViewModel",
-                "청크 $chunkIndex/$totalChunks (${pos}ms~${pos + chunkDuration}ms) [$formatHint]"
-            )
-
-            if (chunkIndex > 1) {
-                Log.i("SttViewModel", "모델 재로드...")
-                val reloaded = whisperEngine.loadModel(modelPath)
-                if (!reloaded) {
-                    throw RuntimeException("청크 $chunkIndex 모델 재로드 실패: $modelPath")
-                }
-            }
-
-            val primaryEndMs = pos + chunkDuration
-            val decodeStartMs = (pos - CHUNK_OVERLAP_MS).coerceAtLeast(0L)
-            val decodeEndMs = (primaryEndMs + CHUNK_OVERLAP_MS).coerceAtMost(durationMs)
-            val decodedWindow = withContext(Dispatchers.IO) {
-                AudioDecoder.decodeWindowWithMetadata(
-                    audioPath,
-                    decodeStartMs,
-                    decodeEndMs - decodeStartMs
-                )
-            }
-            currentCoroutineContext().ensureActive()
-            if (decodedWindow.isEmpty) {
-                throw IllegalStateException(
-                    "청크 $chunkIndex 디코드 실패 (primary=${pos}ms~${primaryEndMs}ms)"
-                )
-            }
-            if (decodedWindow.decodedStartMs > pos + COVERAGE_TOLERANCE_MS ||
-                decodedWindow.decodedEndMs < primaryEndMs - COVERAGE_TOLERANCE_MS) {
-                throw IllegalStateException(
-                    "청크 $chunkIndex PCM coverage 부족: primary=${pos}~$primaryEndMs, " +
-                        "decoded=${decodedWindow.decodedStartMs}~${decodedWindow.decodedEndMs}"
-                )
-            }
-            coverage += ChunkCoverage(
-                chunkIndex = chunkIndex,
-                primaryStartMs = pos,
-                primaryEndMs = primaryEndMs,
-                decodedStartMs = maxOf(pos, decodedWindow.decodedStartMs),
-                decodedEndMs = minOf(primaryEndMs, decodedWindow.decodedEndMs),
-                decodedSamples = decodedWindow.pcm.size
-            )
-
-            val chunkResult = whisperEngine.transcribePcm(
-                decodedWindow.pcm,
-                decodedWindow.decodedStartMs
-            )
-            val primarySegments = chunkResult.segments.filter { segment ->
-                val midpoint = (segment.startMs + segment.endMs) / 2L
-                midpoint >= pos && midpoint < primaryEndMs
-            }
-            allSegments.addAll(primarySegments)
-            primarySegments.joinToString(" ") { it.text.trim() }
-                .takeIf { it.isNotBlank() }
-                ?.let { textBuilder.append(it).append(' ') }
-            totalElapsedMs += chunkResult.elapsedMs
-
-            Log.i(
-                "SttViewModel",
-                "청크 $chunkIndex 완료: primarySegs=${primarySegments.size}/${chunkResult.segments.size}, " +
-                    "${chunkResult.elapsedMs}ms, pcm=${decodedWindow.pcm.size}, " +
-                    "coverage=${decodedWindow.decodedStartMs}~${decodedWindow.decodedEndMs}"
-            )
-            pos += chunkDuration
-
-            // 발열 대응: 마지막 청크가 아니면 냉각 대기
-            // - 매 청크 후 짧은 대기
-            // - N청크마다 긴 휴식 (쓰로틀 완화)
-            if (pos < durationMs) {
-                val longRest = chunkIndex % CHUNK_LONG_REST_EVERY == 0
-                val coolMs = if (longRest) CHUNK_LONG_REST_MS else CHUNK_COOLDOWN_MS
-                val coolSec = (coolMs / 1000).toInt()
-                val status = if (longRest) {
-                    "냉각 대기 중... (${coolSec}초, ${CHUNK_LONG_REST_EVERY}청크 주기)"
-                } else {
-                    "냉각 대기 중... (${coolSec}초)"
-                }
-                Log.i("SttViewModel", "청크 간 $status")
-                _uiState.update { state ->
-                    state.copy(
-                        batchStatus = if (state.totalFiles > 1) {
-                            // 다중 파일 배치 중이면 파일 상태 유지 + 냉각 표시
-                            "파일 ${state.currentFileIndex + 1}/${state.totalFiles} · $status"
-                        } else {
-                            status
-                        }
-                    )
-                }
-                delay(coolMs)
-            }
-        }
-
-        verifyCoverage(coverage, durationMs)
-
-        Log.i(
-            "SttViewModel",
-            "시간 청크 전사 완료: segs=${allSegments.size}, chars=${textBuilder.length}, " +
-                "elapsed=${totalElapsedMs}ms, coverage=${coverage.size}/$totalChunks"
-        )
-
-        return TranscriptionResult(
-            text = textBuilder.toString().trim(),
-            segments = allSegments,
-            elapsedMs = totalElapsedMs,
-            audioDurationMs = durationMs,
-            modelSize = modelSizeLabel,
-            engineName = whisperEngine.engineName,
-            chunkCoverage = coverage
-        )
-    }
-
-    private fun verifyCoverage(coverage: List<ChunkCoverage>, durationMs: Long) {
-        if (coverage.isEmpty()) {
-            throw IllegalStateException("PCM coverage가 비어 있습니다")
-        }
-        var cursorMs = 0L
-        coverage.sortedBy { it.primaryStartMs }.forEach { chunk ->
-            if (chunk.decodedStartMs > cursorMs + COVERAGE_TOLERANCE_MS ||
-                chunk.decodedEndMs < chunk.primaryEndMs - COVERAGE_TOLERANCE_MS) {
-                throw IllegalStateException(
-                    "PCM coverage 불연속: cursor=$cursorMs, " +
-                        "chunk=${chunk.decodedStartMs}~${chunk.decodedEndMs}, " +
-                        "primary=${chunk.primaryStartMs}~${chunk.primaryEndMs}"
-                )
-            }
-            cursorMs = maxOf(cursorMs, chunk.decodedEndMs)
-        }
-        if (cursorMs < durationMs - COVERAGE_TOLERANCE_MS) {
-            throw IllegalStateException("PCM coverage 미완료: $cursorMs/$durationMs ms")
-        }
-    }
-
     companion object {
         private const val MAX_AUTOMATION_NOTE_LENGTH = 200
-        private const val CHUNK_DURATION_MS = 10 * 60 * 1000L  // 10분
-        /** 경계 인식 손실을 줄이기 위한 좌우 오디오 문맥. */
-        private const val CHUNK_OVERLAP_MS = 1_000L
-        private const val COVERAGE_TOLERANCE_MS = 50L
-        /** 시간 청크 사이 기본 냉각 (다중 파일 간 대기와 동일 계열) */
-        private const val CHUNK_COOLDOWN_MS = 10_000L
-        /** N청크마다 추가 긴 휴식 */
-        private const val CHUNK_LONG_REST_EVERY = 5
-        private const val CHUNK_LONG_REST_MS = 30_000L
+        internal fun batchInputError(audioPaths: List<String>): String? = when {
+            audioPaths.isEmpty() -> "오디오 파일을 선택하세요"
+            audioPaths.size != 1 -> "현재는 체크포인트 안전성을 위해 오디오를 한 개씩 전사합니다"
+            else -> null
+        }
         val RESULT_DELETE_BLOCKED_STATUSES = setOf(
             TranscriptionSessionStore.Status.PREPARING,
             TranscriptionSessionStore.Status.RUNNING,
@@ -1208,7 +1067,6 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
-        releaseWhenIdle = true
         try {
             getApplication<Application>().unregisterReceiver(serviceStatusReceiver)
         } catch (_: Exception) {
@@ -1217,8 +1075,6 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         val session = activeSession
         if (session?.isActive == true) {
             session.cancel(CancellationException("ViewModel이 해제됨"))
-        } else {
-            whisperEngine.release()
         }
         super.onCleared()
     }

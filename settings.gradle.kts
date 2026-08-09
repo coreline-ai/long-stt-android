@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "AndroidSttBenchmark"
 include(":app")
+include(":codex-oauth-android")

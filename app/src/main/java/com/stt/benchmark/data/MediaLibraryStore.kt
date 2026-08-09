@@ -7,11 +7,16 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
+/** All app components share one AtomicFile index; instance monitors alone cannot prevent lost updates. */
+private val mediaLibraryIndexLock = Any()
+
 /**
  * 사용자가 앱에 가져온 오디오와 설치된 모델의 선택 상태를 보관한다.
  * 실제 큰 파일은 개별 파일로 유지하고, 이 파일은 목록 메타데이터만 원자적으로 저장한다.
  */
 class MediaLibraryStore(private val context: Context) {
+
+    enum class AudioSource { IMPORTED, RECORDED }
 
     data class AudioEntry(
         val id: String,
@@ -20,7 +25,12 @@ class MediaLibraryStore(private val context: Context) {
         val sizeBytes: Long,
         val durationMs: Long,
         val importedAtMs: Long,
-        val lastSelectedAtMs: Long = 0L
+        val lastSelectedAtMs: Long = 0L,
+        val source: AudioSource = AudioSource.IMPORTED,
+        val recordingSessionId: String = "",
+        val sequence: Int = -1,
+        val codec: String = "",
+        val sha256: String = "",
     )
 
     data class ModelEntry(
@@ -43,7 +53,7 @@ class MediaLibraryStore(private val context: Context) {
     private val modelsDir = File(rootDir, MODELS_DIR).apply { mkdirs() }
 
     @Synchronized
-    fun listAudios(): List<AudioEntry> {
+    fun listAudios(): List<AudioEntry> = synchronized(mediaLibraryIndexLock) {
         val index = loadIndex()
         val refreshed = index.audios
             .filter { File(it.path).isFile }
@@ -72,44 +82,77 @@ class MediaLibraryStore(private val context: Context) {
             }
         val merged = refreshed + legacy
         if (merged != index.audios) saveIndex(index.copy(audios = merged))
-        return merged.sortedWith(compareByDescending<AudioEntry> { it.lastSelectedAtMs }.thenByDescending { it.importedAtMs })
+        merged.sortedWith(compareByDescending<AudioEntry> { it.lastSelectedAtMs }.thenByDescending { it.importedAtMs })
     }
 
     @Synchronized
-    fun selectedAudioPath(): String = loadIndex().selectedAudioPath
-        .takeIf { File(it).isFile && isManagedFile(File(it)) }
-        .orEmpty()
+    fun selectedAudioPath(): String = synchronized(mediaLibraryIndexLock) {
+        loadIndex().selectedAudioPath
+            .takeIf { File(it).isFile && isManagedFile(File(it)) }
+            .orEmpty()
+    }
 
     @Synchronized
-    fun selectedModelPath(): String = loadIndex().selectedModelPath
-        .takeIf { File(it).isFile && isManagedFile(File(it)) }
-        .orEmpty()
+    fun selectedModelPath(): String = synchronized(mediaLibraryIndexLock) {
+        loadIndex().selectedModelPath
+            .takeIf { File(it).isFile && isManagedFile(File(it)) }
+            .orEmpty()
+    }
 
     @Synchronized
-    fun registerAudio(file: File, displayName: String, durationMs: Long = 0L): AudioEntry {
+    @JvmOverloads
+    fun registerAudio(
+        file: File,
+        displayName: String,
+        durationMs: Long = 0L,
+        source: AudioSource = AudioSource.IMPORTED,
+        recordingSessionId: String = "",
+        sequence: Int = -1,
+        codec: String = "",
+        sha256: String = "",
+    ): AudioEntry = synchronized(mediaLibraryIndexLock) {
         require(isManagedFile(file) && file.isFile) { "앱 내부 오디오 파일만 등록할 수 있습니다" }
+        require(source != AudioSource.RECORDED || recordingSessionId.isNotBlank()) {
+            "녹음 오디오에는 recordingSessionId가 필요합니다"
+        }
+        require(sequence >= -1) { "sequence는 -1 이상이어야 합니다" }
+        require(sha256.isBlank() || sha256.matches(Regex("[a-fA-F0-9]{64}"))) { "잘못된 SHA-256" }
         val now = System.currentTimeMillis()
         val index = loadIndex()
         val existing = index.audios.firstOrNull { it.path == file.absolutePath }
         val entry = existing?.copy(
             displayName = displayName.ifBlank { existing.displayName },
             sizeBytes = file.length(),
-            durationMs = durationMs.takeIf { it > 0L } ?: existing.durationMs
+            durationMs = durationMs.takeIf { it > 0L } ?: existing.durationMs,
+            source = if (source == AudioSource.IMPORTED && existing.source == AudioSource.RECORDED) {
+                existing.source
+            } else {
+                source
+            },
+            recordingSessionId = recordingSessionId.ifBlank { existing.recordingSessionId },
+            sequence = sequence.takeIf { it >= 0 } ?: existing.sequence,
+            codec = codec.ifBlank { existing.codec },
+            sha256 = sha256.lowercase().ifBlank { existing.sha256 },
         ) ?: AudioEntry(
             id = UUID.randomUUID().toString(),
             path = file.absolutePath,
             displayName = displayName.ifBlank { file.name },
             sizeBytes = file.length(),
             durationMs = durationMs.coerceAtLeast(0L),
-            importedAtMs = now
+            importedAtMs = now,
+            source = source,
+            recordingSessionId = recordingSessionId,
+            sequence = sequence,
+            codec = codec,
+            sha256 = sha256.lowercase(),
         )
         val next = index.audios.filterNot { it.path == file.absolutePath } + entry
         saveIndex(index.copy(audios = next, hiddenAudioPaths = index.hiddenAudioPaths - file.absolutePath))
-        return entry
+        entry
     }
 
     @Synchronized
-    fun selectAudio(path: String) {
+    fun selectAudio(path: String) = synchronized(mediaLibraryIndexLock) {
         val file = File(path)
         require(isManagedFile(file) && file.isFile) { "선택할 오디오 파일이 없습니다" }
         val now = System.currentTimeMillis()
@@ -137,7 +180,7 @@ class MediaLibraryStore(private val context: Context) {
 
     /** 목록에서만 숨기며 실제 오디오 파일과 전사 결과는 지우지 않는다. */
     @Synchronized
-    fun forgetAudio(path: String) {
+    fun forgetAudio(path: String) = synchronized(mediaLibraryIndexLock) {
         val index = loadIndex()
         saveIndex(
             index.copy(
@@ -149,23 +192,26 @@ class MediaLibraryStore(private val context: Context) {
     }
 
     @Synchronized
-    fun clearSelectedAudio() {
+    fun clearSelectedAudio() = synchronized(mediaLibraryIndexLock) {
         val index = loadIndex()
         if (index.selectedAudioPath.isNotBlank()) saveIndex(index.copy(selectedAudioPath = ""))
     }
 
     /** 호출자는 활성 세션/연결 결과를 확인한 뒤 실제 삭제를 허용해야 한다. */
     @Synchronized
-    fun deleteAudioFile(path: String): Boolean {
+    fun deleteAudioFile(path: String): Boolean = synchronized(mediaLibraryIndexLock) {
         val file = File(path)
-        if (!isManagedFile(file)) return false
-        val deleted = !file.exists() || file.delete()
-        if (deleted) forgetAudio(path)
-        return deleted
+        if (!isManagedFile(file)) {
+            false
+        } else {
+            val deleted = !file.exists() || file.delete()
+            if (deleted) forgetAudio(path)
+            deleted
+        }
     }
 
     @Synchronized
-    fun selectModel(path: String) {
+    fun selectModel(path: String) = synchronized(mediaLibraryIndexLock) {
         val file = File(path)
         require(isManagedFile(file) && file.isFile) { "선택할 모델 파일이 없습니다" }
         val index = loadIndex()
@@ -173,7 +219,7 @@ class MediaLibraryStore(private val context: Context) {
     }
 
     @Synchronized
-    fun listInstalledModels(): List<ModelEntry> {
+    fun listInstalledModels(): List<ModelEntry> = synchronized(mediaLibraryIndexLock) {
         val files = buildList {
             modelsDir.listFiles()?.filterTo(this) { it.isFile && it.extension.equals("bin", true) }
             // 이전 버전이 filesDir 루트에 저장한 모델도 계속 사용할 수 있어야 한다.
@@ -182,7 +228,7 @@ class MediaLibraryStore(private val context: Context) {
             }
         }.distinctBy { it.canonicalPath }
 
-        return files.map { file ->
+        files.map { file ->
             ModelEntry(
                 path = file.absolutePath,
                 displayName = file.name.removeSuffix(".bin"),
@@ -193,15 +239,17 @@ class MediaLibraryStore(private val context: Context) {
     }
 
     @Synchronized
-    fun deleteModelFile(path: String): Boolean {
+    fun deleteModelFile(path: String): Boolean = synchronized(mediaLibraryIndexLock) {
         val file = File(path)
-        if (!isManagedFile(file) || !file.extension.equals("bin", true)) return false
-        if (!file.exists() || file.delete()) {
+        if (!isManagedFile(file) || !file.extension.equals("bin", true)) {
+            false
+        } else if (!file.exists() || file.delete()) {
             val index = loadIndex()
             if (index.selectedModelPath == path) saveIndex(index.copy(selectedModelPath = ""))
-            return true
+            true
+        } else {
+            false
         }
-        return false
     }
 
     private fun isManagedFile(file: File): Boolean = try {
@@ -212,9 +260,9 @@ class MediaLibraryStore(private val context: Context) {
     }
 
     private fun loadIndex(): Index {
-        if (!indexFile.exists()) return Index()
         return try {
-            val json = JSONObject(indexFile.readText(Charsets.UTF_8))
+            val jsonText = AtomicFile(indexFile).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val json = JSONObject(jsonText)
             val array = json.optJSONArray("audios") ?: JSONArray()
             Index(
                 selectedAudioPath = json.optString("selectedAudioPath"),
@@ -228,7 +276,14 @@ class MediaLibraryStore(private val context: Context) {
                         sizeBytes = item.optLong("sizeBytes"),
                         durationMs = item.optLong("durationMs"),
                         importedAtMs = item.optLong("importedAtMs"),
-                        lastSelectedAtMs = item.optLong("lastSelectedAtMs")
+                        lastSelectedAtMs = item.optLong("lastSelectedAtMs"),
+                        source = runCatching {
+                            AudioSource.valueOf(item.optString("source", AudioSource.IMPORTED.name))
+                        }.getOrDefault(AudioSource.IMPORTED),
+                        recordingSessionId = item.optString("recordingSessionId"),
+                        sequence = item.optInt("sequence", -1),
+                        codec = item.optString("codec"),
+                        sha256 = item.optString("sha256"),
                     )
                 },
                 hiddenAudioPaths = (json.optJSONArray("hiddenAudioPaths") ?: JSONArray()).let { hidden ->
@@ -243,7 +298,7 @@ class MediaLibraryStore(private val context: Context) {
 
     private fun saveIndex(index: Index) {
         val json = JSONObject().apply {
-            put("version", 1)
+            put("version", 2)
             put("selectedAudioPath", index.selectedAudioPath)
             put("selectedModelPath", index.selectedModelPath)
             put("hiddenAudioPaths", JSONArray(index.hiddenAudioPaths.toList()))
@@ -257,6 +312,11 @@ class MediaLibraryStore(private val context: Context) {
                         put("durationMs", entry.durationMs)
                         put("importedAtMs", entry.importedAtMs)
                         put("lastSelectedAtMs", entry.lastSelectedAtMs)
+                        put("source", entry.source.name)
+                        put("recordingSessionId", entry.recordingSessionId)
+                        put("sequence", entry.sequence)
+                        put("codec", entry.codec)
+                        put("sha256", entry.sha256)
                     })
                 }
             })

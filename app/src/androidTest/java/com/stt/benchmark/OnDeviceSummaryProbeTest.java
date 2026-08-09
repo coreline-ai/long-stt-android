@@ -21,6 +21,7 @@ import com.stt.benchmark.whisper.TranscriptSegment;
 
 import org.json.JSONObject;
 import org.junit.Test;
+import org.junit.Assume;
 import org.junit.runner.RunWith;
 
 import java.io.File;
@@ -41,6 +42,12 @@ public class OnDeviceSummaryProbeTest {
     @Test
     public void summarizeMiddleOfLatestSixHourTranscript() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Assume.assumeTrue(
+                "AICore probe는 -e runAicoreProbe true로 명시한 경우에만 실행합니다",
+                "true".equalsIgnoreCase(
+                        InstrumentationRegistry.getArguments().getString("runAicoreProbe", "false")
+                )
+        );
         Context context = instrumentation.getTargetContext();
         Activity activity = instrumentation.startActivitySync(
                 new Intent(context, SummaryProbeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

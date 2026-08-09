@@ -1,7 +1,7 @@
 package com.stt.benchmark.whisper
 
 import android.content.Context
-import android.util.Log
+import com.stt.benchmark.core.AppLog
 import com.whispercpp.whisper.WhisperLib
 import java.io.File
 
@@ -62,7 +62,7 @@ class WhisperCppEngine(
     override fun loadModel(modelPath: String): Boolean {
         val modelFile = File(modelPath)
         if (!modelFile.exists()) {
-            Log.e(TAG, "모델 파일 없음: $modelPath")
+            AppLog.e(TAG, "모델 파일 없음: $modelPath")
             return false
         }
 
@@ -75,18 +75,18 @@ class WhisperCppEngine(
 
         try {
             val localModel = ensureModelAccessible(modelPath)
-            Log.i(TAG, "모델 네이티브 로드 시도: ${localModel.absolutePath}")
+            AppLog.i(TAG, "모델 네이티브 로드 시도: ${localModel.absolutePath}")
 
             ctx = WhisperLib.initContext(localModel.absolutePath)
             if (ctx == 0L) {
-                Log.e(TAG, "모델 로드 실패 (ctx == 0): ${localModel.absolutePath}")
+                AppLog.e(TAG, "모델 로드 실패 (ctx == 0): ${localModel.absolutePath}")
                 return false
             }
-            Log.i(TAG, "모델 로드 성공: ${localModel.name} (${localModel.length() / 1024 / 1024}MB), ctx=$ctx")
+            AppLog.i(TAG, "모델 로드 성공: ${localModel.name} (${localModel.length() / 1024 / 1024}MB), ctx=$ctx")
             isModelLoaded = true
             return true
         } catch (e: Exception) {
-            Log.e(TAG, "모델 로드 예외", e)
+            AppLog.e(TAG, "모델 로드 예외", e)
             return false
         }
     }
@@ -104,7 +104,7 @@ class WhisperCppEngine(
         val modelSize = "${audioFile.length() / 1024 / 1024}MB"
 
         // 오디오 디코딩
-        Log.i(TAG, "오디오 디코딩: ${localAudio.name}")
+        AppLog.i(TAG, "오디오 디코딩: ${localAudio.name}")
         val pcmFloats = AudioDecoder.decodeToFloatArray(localAudio.absolutePath)
         if (pcmFloats.isEmpty()) throw RuntimeException("오디오 디코딩 실패")
 
@@ -131,7 +131,7 @@ class WhisperCppEngine(
     private fun transcribePcmInternal(pcm: FloatArray, offsetMs: Long): TranscriptionResult {
         val audioDurationMs = (pcm.size.toLong() * 1000L) / 16000L
 
-        Log.i(TAG, "whisper_full 전사 (${pcm.size} samples, offset=${offsetMs}ms, threads=$NUM_THREADS)")
+        AppLog.i(TAG, "whisper_full 전사 (${pcm.size} samples, offset=${offsetMs}ms, threads=$NUM_THREADS)")
         val startTime = System.currentTimeMillis()
 
         val nativeResult = WhisperLib.fullTranscribe(ctx, NUM_THREADS, pcm)
@@ -140,10 +140,10 @@ class WhisperCppEngine(
         }
 
         val elapsedMs = System.currentTimeMillis() - startTime
-        Log.i(TAG, "전사 완료: ${elapsedMs}ms (RTF=%.3f)".format(elapsedMs.toFloat() / audioDurationMs))
+        AppLog.i(TAG, "전사 완료: ${elapsedMs}ms (RTF=%.3f)".format(elapsedMs.toFloat() / audioDurationMs))
 
         val segCount = WhisperLib.getTextSegmentCount(ctx)
-        Log.i(TAG, "세그먼트 수: $segCount")
+        AppLog.i(TAG, "세그먼트 수: $segCount")
 
         val segments = (0 until segCount).map { i ->
             TranscriptSegment(
@@ -153,7 +153,7 @@ class WhisperCppEngine(
             )
         }
         val fullText = segments.joinToString(" ") { it.text.trim() }.trim()
-        Log.i(TAG, "전사 텍스트 길이: ${fullText.length}자")
+        AppLog.i(TAG, "전사 텍스트 길이: ${fullText.length}자")
 
         progressCallback?.invoke(1.0f)
 
@@ -177,9 +177,9 @@ class WhisperCppEngine(
         if (ctx != 0L) {
             try {
                 WhisperLib.freeContext(ctx)
-                Log.i(TAG, "컨텍스트 해제 (ctx=$ctx)")
+                AppLog.i(TAG, "컨텍스트 해제 (ctx=$ctx)")
             } catch (e: Exception) {
-                Log.e(TAG, "컨텍스트 해제 예외", e)
+                AppLog.e(TAG, "컨텍스트 해제 예외", e)
             }
             ctx = 0L
         }
@@ -200,12 +200,12 @@ class WhisperCppEngine(
             return dst
         }
 
-        Log.i(TAG, "복사: ${src.absolutePath} → ${dst.absolutePath}")
+        AppLog.i(TAG, "복사: ${src.absolutePath} → ${dst.absolutePath}")
         return try {
             src.inputStream().use { it.copyTo(dst.outputStream()) }
             dst
         } catch (e: Exception) {
-            Log.w(TAG, "복사 실패, 원본 사용: $path", e)
+            AppLog.w(TAG, "복사 실패, 원본 사용: $path", e)
             src
         }
     }

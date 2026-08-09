@@ -10,18 +10,15 @@
         <activity
             android:name=".SummaryProbeActivity"
             android:exported="true" />
+        <activity
+            android:name=".DebugSttAuditActivity"
+            android:exported="true" />
+        <activity
+            android:name=".DebugRecordingAuditActivity"
+            android:exported="true" />
+        <activity
+            android:name=".DebugLongSingleFileAuditActivity"
+            android:exported="true" />
 
-        <!--
-            ML Kit SDK는 androidTest APK에만 포함된다. 대상 앱 프로세스에서 명시적으로
-            MlKit.initialize() 할 때 공통 구성요소를 찾을 수 있도록 디버그 APK에만 등록한다.
-        -->
-        <service
-            android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
-            android:directBootAware="true"
-            android:exported="false">
-            <meta-data
-                android:name="com.google.firebase.components:com.google.mlkit.common.internal.CommonComponentRegistrar"
-                android:value="com.google.firebase.components.ComponentRegistrar" />
-        </service>
     </application>
 </manifest>
