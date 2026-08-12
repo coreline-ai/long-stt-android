@@ -4,6 +4,7 @@ import android.app.Application
 import com.stt.benchmark.core.AppLog
 import com.stt.benchmark.recording.RecordingRecoveryCoordinator
 import com.stt.benchmark.data.RecordingTranscriptionGroupStore
+import com.stt.benchmark.export.TranscriptFileShareFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,6 +45,11 @@ class SttApp : Application() {
                     .reconcileAfterProcessDeath(processStartedAtMs)
             }.onFailure { error ->
                 AppLog.e(TAG, "녹음 그룹 복구 검사 실패: ${error.javaClass.simpleName}")
+            }
+            runCatching {
+                TranscriptFileShareFactory(this@SttApp).cleanupExpired(processStartedAtMs)
+            }.onFailure { error ->
+                AppLog.e(TAG, "전사 공유 cache 정리 실패: ${error.javaClass.simpleName}")
             }
         }
     }

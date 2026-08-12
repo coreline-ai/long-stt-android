@@ -20,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -41,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stt.benchmark.data.MediaLibraryStore
+import com.stt.benchmark.ui.CompletedResultTarget
 import com.stt.benchmark.ui.SttViewModel
 import com.stt.benchmark.ui.common.ArchiveStatusTone
 import com.stt.benchmark.ui.common.SectionLabel
@@ -60,6 +63,7 @@ import java.io.File
 fun TranscriptionRoute(
     viewModel: SttViewModel,
     onOpenSettings: () -> Unit,
+    onOpenCompletedResult: (CompletedResultTarget) -> Unit = {},
     modifier: Modifier = Modifier,
     routeViewModel: TranscriptionRouteViewModel = viewModel(),
 ) {
@@ -96,6 +100,7 @@ fun TranscriptionRoute(
         onRun = viewModel::runBenchmark,
         onCancel = viewModel::cancelActiveSession,
         onOpenSettings = onOpenSettings,
+        onOpenCompletedResult = onOpenCompletedResult,
         modifier = modifier,
     )
 }
@@ -119,6 +124,7 @@ fun TranscriptionScreen(
     onRun: () -> Unit,
     onCancel: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenCompletedResult: (CompletedResultTarget) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val controlsLocked = state.isDownloading || state.state in setOf(
@@ -167,6 +173,7 @@ fun TranscriptionScreen(
             canRun = canRun,
             onRun = onRun,
             onCancel = onCancel,
+            onOpenCompletedResult = onOpenCompletedResult,
         )
 
         if (state.errorMessage.isNotBlank()) {
@@ -365,6 +372,7 @@ private fun TranscriptionRunSection(
     canRun: Boolean,
     onRun: () -> Unit,
     onCancel: () -> Unit,
+    onOpenCompletedResult: (CompletedResultTarget) -> Unit,
 ) {
     val active = state.state in setOf(SttViewModel.SttState.RUNNING, SttViewModel.SttState.CANCELLING)
     val filePct = (state.progress * 100).toInt().coerceIn(0, 100)
@@ -439,14 +447,38 @@ private fun TranscriptionRunSection(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                Button(
-                    onClick = onRun,
-                    enabled = canRun,
-                    modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (state.totalFiles > 1) "순차 전사 시작 (${state.totalFiles}개)" else "전사 시작")
+                val completedTarget = state.completedResultTarget
+                if (state.state == SttViewModel.SttState.DONE && completedTarget != null) {
+                    Button(
+                        onClick = { onOpenCompletedResult(completedTarget) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .archiveTouchTarget()
+                            .semantics { contentDescription = "완료 전사 보관함에서 보기" },
+                    ) {
+                        Icon(Icons.Default.Inventory2, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("보관함에서 결과 보기")
+                    }
+                    OutlinedButton(
+                        onClick = onRun,
+                        enabled = canRun,
+                        modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("같은 오디오 다시 전사")
+                    }
+                } else {
+                    Button(
+                        onClick = onRun,
+                        enabled = canRun,
+                        modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (state.totalFiles > 1) "순차 전사 시작 (${state.totalFiles}개)" else "전사 시작")
+                    }
                 }
             }
         }

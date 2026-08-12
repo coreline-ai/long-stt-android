@@ -83,13 +83,27 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         val audioPaths: List<String> = emptyList(),
         val currentFileIndex: Int = 0,
         val totalFiles: Int = 0,
-        val batchStatus: String = ""
+        val batchStatus: String = "",
+        /** 방금 완료된 결과를 보관함 상세로 여는 원문 없는 일회성 UI target. */
+        val completedResultTarget: CompletedResultTarget? = null,
     ) {
         /** 전체 진행률 (완료된 파일 + 현재 파일 부분 진행률) */
         val batchProgress: Float
             get() = if (totalFiles > 0) {
                 (currentFileIndex.toFloat() + progress) / totalFiles.toFloat()
             } else 0f
+
+        /** 새 입력 준비 시 이전 완료 화면의 상태와 결과 이동 target을 함께 폐기한다. */
+        internal fun withPreparedAudio(paths: List<String>): UiState = copy(
+            audioPath = paths.firstOrNull().orEmpty(),
+            audioPaths = paths,
+            totalFiles = paths.size,
+            currentFileIndex = 0,
+            state = if (modelLoaded) SttState.READY else SttState.IDLE,
+            batchStatus = "",
+            errorMessage = "",
+            completedResultTarget = null,
+        )
     }
 
     private val _uiState = MutableStateFlow(UiState())
@@ -284,6 +298,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 _uiState.update {
+                    val completedTarget = checkpoint?.let(CompletedResultTarget::fromSession)
                     it.copy(
                         state = SttState.DONE,
                         progress = 1f,
@@ -292,7 +307,13 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                         ),
                         lastReport = record?.let(recorder::formatReport).orEmpty(),
                         batchStatus = detail.ifBlank { "전사 완료" },
-                        errorMessage = ""
+                        errorMessage = "",
+                        completedResultTarget = completedTarget,
+                        resultSessions = checkpoint?.let { completed ->
+                            listOf(completed) + it.resultSessions.filterNot { old ->
+                                old.sessionId == completed.sessionId
+                            }
+                        } ?: it.resultSessions,
                     )
                 }
                 _uiState.update { it.copy(history = records) }
@@ -379,6 +400,11 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     ) group.errorMessage else "",
                     recordingGroups = groups,
+                    completedResultTarget = if (group.isTerminal) {
+                        CompletedResultTarget.fromGroup(group)
+                    } else {
+                        current.completedResultTarget
+                    },
                 )
             }
             if (group.isTerminal) {
@@ -413,7 +439,8 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                 totalFiles = 1,
                 currentFileIndex = 0,
                 batchStatus = "Foreground 전사 서비스 시작 중...",
-                errorMessage = ""
+                errorMessage = "",
+                completedResultTarget = null,
             )
         }
         viewModelScope.launch {
@@ -497,7 +524,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         launchExclusiveSession("모델을 변경") {
-            _uiState.update { it.copy(state = SttState.LOADING_MODEL) }
+            _uiState.update { it.copy(state = SttState.LOADING_MODEL, completedResultTarget = null) }
             val ok = isManagedReadableFile(path) && File(path).extension.equals("bin", ignoreCase = true)
             if (ok) {
                 withContext(Dispatchers.IO) { mediaLibraryStore.selectModel(path) }
@@ -522,9 +549,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             withContext(Dispatchers.IO) { mediaLibraryStore.selectAudio(path) }
-            _uiState.update {
-                it.copy(audioPath = path, audioPaths = listOf(path), totalFiles = 1, currentFileIndex = 0)
-            }
+            _uiState.update { it.withPreparedAudio(listOf(path)) }
             loadMediaLibrary()
         }
     }
@@ -545,7 +570,9 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun copyAudioFromUri(uri: android.net.Uri) {
         launchExclusiveSession("오디오 파일을 가져오기") {
-            _uiState.update { it.copy(state = SttState.LOADING_MODEL, errorMessage = "") }
+            _uiState.update {
+                it.copy(state = SttState.LOADING_MODEL, errorMessage = "", completedResultTarget = null)
+            }
             val copied = withContext(Dispatchers.IO) { copyAudioUri(uri) }
             if (copied == null) {
                 _uiState.update { it.copy(state = SttState.ERROR, errorMessage = "파일 복사 실패") }
@@ -556,17 +583,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                 mediaLibraryStore.registerAudio(File(copied.path), copied.displayName, durationMs)
                 mediaLibraryStore.selectAudio(copied.path)
             }
-            _uiState.update { current ->
-                current.copy(
-                    audioPath = copied.path,
-                    audioPaths = listOf(copied.path),
-                    totalFiles = 1,
-                    currentFileIndex = 0,
-                    batchStatus = "",
-                    state = if (current.modelLoaded) SttState.READY else SttState.IDLE,
-                    errorMessage = ""
-                )
-            }
+            _uiState.update { current -> current.withPreparedAudio(listOf(copied.path)) }
             loadMediaLibrary()
         }
     }
@@ -620,7 +637,9 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
     fun copyAudioFromUris(uris: List<Uri>) {
         if (uris.isEmpty()) return
         launchExclusiveSession("오디오 목록을 변경") {
-            _uiState.update { it.copy(state = SttState.LOADING_MODEL, errorMessage = "") }
+            _uiState.update {
+                it.copy(state = SttState.LOADING_MODEL, errorMessage = "", completedResultTarget = null)
+            }
             val existing = _uiState.value.audioPaths.toMutableList()
             val added = mutableListOf<String>()
 
@@ -640,13 +659,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
             val merged = existing + added
             if (merged.isNotEmpty()) {
                 _uiState.update {
-                    it.copy(
-                        audioPaths = merged,
-                        audioPath = merged.first(),
-                        totalFiles = merged.size,
-                        currentFileIndex = 0,
-                        batchStatus = "",
-                        state = SttState.READY,
+                    it.withPreparedAudio(merged).copy(
                         errorMessage = if (added.isEmpty() && existing.isNotEmpty()) {
                             "새 파일이 추가되지 않았습니다"
                         } else {
@@ -701,6 +714,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                 currentFileIndex = 0,
                 batchStatus = "녹음 청크 무결성을 확인하는 중...",
                 errorMessage = "",
+                completedResultTarget = null,
             )
         }
         viewModelScope.launch {
@@ -764,15 +778,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         val newPaths = current.audioPaths.toMutableList()
         if (index in newPaths.indices) {
             newPaths.removeAt(index)
-            _uiState.update {
-                it.copy(
-                    audioPaths = newPaths,
-                    audioPath = newPaths.firstOrNull() ?: "",
-                    totalFiles = newPaths.size,
-                    currentFileIndex = 0,
-                    batchStatus = ""
-                )
-            }
+            _uiState.update { it.withPreparedAudio(newPaths) }
         }
     }
 
@@ -780,16 +786,7 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
         if (rejectIfSessionBusy("오디오 선택을 해제")) return
         viewModelScope.launch {
             withContext(Dispatchers.IO) { mediaLibraryStore.clearSelectedAudio() }
-            _uiState.update {
-                it.copy(
-                    audioPath = "",
-                    audioPaths = emptyList(),
-                    totalFiles = 0,
-                    currentFileIndex = 0,
-                    batchStatus = "",
-                    errorMessage = ""
-                )
-            }
+            _uiState.update { it.withPreparedAudio(emptyList()) }
         }
     }
 
@@ -828,7 +825,10 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                     resultSessions = current.resultSessions.filterNot { it.sessionId == sessionId },
                     result = current.result.takeUnless { sessionResult.text == it?.text },
                     lastReport = if (current.result?.text == sessionResult.text) "" else current.lastReport,
-                    errorMessage = ""
+                    errorMessage = "",
+                    completedResultTarget = current.completedResultTarget?.takeUnless { target ->
+                        target.type == CompletedResultTarget.Type.TRANSCRIPTION_SESSION && target.id == sessionId
+                    },
                 )
             }
             loadHistory()
@@ -861,6 +861,9 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                     recordingGroups = current.recordingGroups.filterNot { it.groupId == groupId },
                     resultSessions = current.resultSessions.filterNot { session -> session.recordingGroupId == groupId },
                     errorMessage = "",
+                    completedResultTarget = current.completedResultTarget?.takeUnless { target ->
+                        target.type == CompletedResultTarget.Type.RECORDING_GROUP && target.id == groupId
+                    },
                 )
             }
             loadHistory()

@@ -9,6 +9,7 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,9 +63,10 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.stt.benchmark.R
 import com.stt.benchmark.recording.RecordingPhase
+import com.stt.benchmark.ui.common.ArchiveArtwork
 import com.stt.benchmark.ui.common.ArchiveStatusTone
-import com.stt.benchmark.ui.common.CopperThreadArtwork
 import com.stt.benchmark.ui.common.RecordControl
 import com.stt.benchmark.ui.common.SectionLabel
 import com.stt.benchmark.ui.common.SoundThread
@@ -173,6 +175,7 @@ fun RecordingScreen(
     val elapsed = state.runtime.elapsedMs
     val controlEnabled = state.canStart || state.canStop
     val controlAction = if (state.canStop) "녹음 정지" else "녹음 시작"
+    val artwork = recordingArtwork(state.displayPhase)
     var partialTarget by remember { mutableStateOf<RecentRecordingUi?>(null) }
 
     Column(
@@ -190,8 +193,9 @@ fun RecordingScreen(
                     liveRegion = LiveRegionMode.Polite
                 },
         ) {
-            CopperThreadArtwork(
-                archiveMode = state.displayPhase == RecordingPhase.SAVED,
+            ArchiveArtwork(
+                imageRes = artwork.imageRes,
+                contentDescription = artwork.contentDescription,
                 modifier = Modifier.fillMaxSize(),
             )
             Box(
@@ -545,6 +549,30 @@ internal data class RecordingPresentation(
     val detail: String,
     val tone: ArchiveStatusTone,
 )
+
+internal data class RecordingArtwork(
+    @DrawableRes val imageRes: Int,
+    val contentDescription: String,
+)
+
+internal fun recordingArtwork(phase: RecordingPhase): RecordingArtwork = when (phase) {
+    RecordingPhase.RECORDING,
+    RecordingPhase.ROLLING_OVER,
+    RecordingPhase.FINALIZING -> RecordingArtwork(
+        imageRes = R.drawable.art_recording_active,
+        contentDescription = "음성 흐름이 활성 청크에 안전하게 기록되는 그림",
+    )
+
+    RecordingPhase.SAVED -> RecordingArtwork(
+        imageRes = R.drawable.art_recording_saved,
+        contentDescription = "완료된 녹음 청크 세 개가 봉인되어 보관된 그림",
+    )
+
+    else -> RecordingArtwork(
+        imageRes = R.drawable.art_recording_ready,
+        contentDescription = "녹음을 기다리는 음성 흐름과 빈 청크 슬롯 그림",
+    )
+}
 
 internal fun recordingPresentation(state: RecordingUiState): RecordingPresentation = when (state.displayPhase) {
     RecordingPhase.PREPARING -> RecordingPresentation("녹음 준비", "마이크와 안전 저장공간을 확인하고 있습니다.", ArchiveStatusTone.ACTIVE)

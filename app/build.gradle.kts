@@ -18,7 +18,7 @@ val verifyAssetProvenance = tasks.register("verifyAssetProvenance") {
     inputs.file(fontNotice)
     inputs.files(
         fileTree("src/main/res") {
-            include("drawable/**", "mipmap*/**", "font/**")
+            include("drawable*/**", "mipmap*/**", "font/**")
             exclude("**/.gitkeep")
         },
     )
@@ -47,7 +47,7 @@ val verifyAssetProvenance = tasks.register("verifyAssetProvenance") {
 
         val manifestPaths = records.map(AssetRecord::path).toSet()
         val packagedAssets = fileTree("src/main/res") {
-            include("drawable/**", "mipmap*/**", "font/**")
+            include("drawable*/**", "mipmap*/**", "font/**")
             exclude("**/.gitkeep")
         }.files.map { it.relativeTo(rootProject.projectDir).invariantSeparatorsPath }.toSet()
         check(manifestPaths == packagedAssets) {

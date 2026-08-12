@@ -1,9 +1,11 @@
 package com.stt.benchmark.ui.common
 
+import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -35,12 +37,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
@@ -50,6 +51,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.stt.benchmark.R
 import com.stt.benchmark.ui.theme.ArchiveCopper
 import com.stt.benchmark.ui.theme.ArchiveFog
 import com.stt.benchmark.ui.theme.ArchiveHairline
@@ -246,6 +248,7 @@ fun ArchiveEmptyState(
     title: String,
     body: String,
     modifier: Modifier = Modifier,
+    @DrawableRes imageRes: Int = R.drawable.art_library_empty,
     action: (@Composable () -> Unit)? = null,
 ) {
     Column(
@@ -254,11 +257,14 @@ fun ArchiveEmptyState(
             .padding(vertical = 30.dp, horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        CopperThreadArtwork(
-            archiveMode = true,
+        ArchiveArtwork(
+            imageRes = imageRes,
+            contentDescription = "첫 기록을 기다리는 빈 보관함",
+            contentScale = ContentScale.Fit,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(132.dp),
+                .height(132.dp)
+                .clip(RoundedCornerShape(18.dp)),
         )
         Spacer(Modifier.height(22.dp))
         Text(title, style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
@@ -276,66 +282,19 @@ fun ArchiveEmptyState(
     }
 }
 
-/**
- * The product signature: a copper sound thread that becomes ordered archive rules.
- * It is procedural so Phase 1 does not depend on unapproved raster assets.
- */
 @Composable
-fun CopperThreadArtwork(
-    archiveMode: Boolean,
+fun ArchiveArtwork(
+    @DrawableRes imageRes: Int,
+    contentDescription: String,
     modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
 ) {
-    Canvas(
-        modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(Color(0xFF292A26), ArchiveInk),
-                    start = Offset.Zero,
-                    end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY),
-                ),
-            )
-            .semantics { contentDescription = "소리의 흐름이 기록으로 정리되는 그림" },
-    ) {
-        val thread = Path()
-        val y = size.height * 0.54f
-        thread.moveTo(-8f, y)
-        val points = if (archiveMode) 8 else 14
-        for (index in 0..points) {
-            val x = size.width * index / points
-            val waveStrength = if (archiveMode) (1f - index.toFloat() / points) else 1f
-            val offset = if (index % 2 == 0) -1f else 1f
-            thread.lineTo(x, y + offset * size.height * 0.18f * waveStrength)
-        }
-        drawPath(
-            path = thread,
-            color = ArchiveCopper,
-            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
-        )
-        if (archiveMode) {
-            repeat(3) { index ->
-                val top = size.height * (0.18f + index * 0.21f)
-                drawRoundRect(
-                    color = ArchivePaper.copy(alpha = 0.08f + index * 0.03f),
-                    topLeft = Offset(size.width * 0.55f, top),
-                    size = Size(size.width * 0.34f, size.height * 0.14f),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(8.dp.toPx()),
-                )
-            }
-        } else {
-            drawCircle(
-                brush = Brush.radialGradient(listOf(ArchiveCopper.copy(alpha = 0.28f), Color.Transparent)),
-                radius = size.minDimension * 0.33f,
-                center = Offset(size.width * 0.5f, size.height * 0.5f),
-            )
-        }
-        drawLine(
-            color = ArchiveFog.copy(alpha = 0.22f),
-            start = Offset(size.width * 0.08f, size.height * 0.84f),
-            end = Offset(size.width * 0.92f, size.height * 0.84f),
-            strokeWidth = 1.dp.toPx(),
-        )
-    }
+    Image(
+        painter = painterResource(imageRes),
+        contentDescription = contentDescription,
+        contentScale = contentScale,
+        modifier = modifier.background(ArchiveInk),
+    )
 }
 
 fun formatDuration(milliseconds: Long): String {

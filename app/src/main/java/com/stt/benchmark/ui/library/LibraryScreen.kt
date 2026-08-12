@@ -1,5 +1,10 @@
 package com.stt.benchmark.ui.library
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -8,46 +13,67 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AudioFile
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.SaveAlt
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stt.benchmark.data.MediaLibraryStore
 import com.stt.benchmark.data.RecordingTranscriptionGroupStore
 import com.stt.benchmark.data.TranscriptionSessionStore
+import com.stt.benchmark.data.TranscriptSourceDocument
+import com.stt.benchmark.data.TranscriptSourceReader
+import com.stt.benchmark.data.TranscriptSourceRef
+import com.stt.benchmark.data.TranscriptSourceType
+import com.stt.benchmark.export.TranscriptDocumentSaver
+import com.stt.benchmark.export.TranscriptExportWriter
+import com.stt.benchmark.export.TranscriptFileShareFactory
 import com.stt.benchmark.summary.CodexAuthPhase
 import com.stt.benchmark.summary.CodexAuthUiState
 import com.stt.benchmark.summary.CodexAuthViewModel
 import com.stt.benchmark.summary.SummaryRequestPolicy
 import com.stt.benchmark.summary.SummarySessionStore
+import com.stt.benchmark.summary.SummaryShareIntentFactory
+import com.stt.benchmark.summary.SummaryStage
 import com.stt.benchmark.summary.SummaryUiState
+import com.stt.benchmark.ui.CompletedResultTarget
 import com.stt.benchmark.ui.SttViewModel
 import com.stt.benchmark.ui.common.ArchiveEmptyState
 import com.stt.benchmark.ui.common.ArchiveStatusTone
@@ -59,6 +85,10 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun LibraryRoute(
@@ -67,30 +97,147 @@ fun LibraryRoute(
     onOpenTranscription: () -> Unit,
     modifier: Modifier = Modifier,
     routeViewModel: LibraryRouteViewModel = viewModel(),
+    initialCompletedResult: CompletedResultTarget? = null,
+    onInitialCompletedResultHandled: () -> Unit = {},
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val documentSaver = remember(context) { TranscriptDocumentSaver(context.applicationContext) }
+    val fileShareFactory = remember(context) { TranscriptFileShareFactory(context.applicationContext) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val auth by codexAuthViewModel.uiState.collectAsStateWithLifecycle()
     val summaryState by codexAuthViewModel.summaryUiState.collectAsStateWithLifecycle()
     val routeState by routeViewModel.uiState.collectAsStateWithLifecycle()
     val selected = state.resultSessions.firstOrNull { it.sessionId == routeState.selectedSessionId }
+    val fullTranscriptSession = state.resultSessions.firstOrNull {
+        it.sessionId == routeState.fullTranscriptSessionId
+    }
     val deleteTarget = state.resultSessions.firstOrNull { it.sessionId == routeState.deleteSessionId }
     val selectedGroup = state.recordingGroups.firstOrNull { it.groupId == routeState.selectedGroupId }
+    val fullTranscriptGroup = state.recordingGroups.firstOrNull {
+        it.groupId == routeState.fullTranscriptGroupId
+    }
     val deleteGroupTarget = state.recordingGroups.firstOrNull { it.groupId == routeState.deleteGroupId }
     val selectedAudio = state.audioLibrary.firstOrNull { it.path == routeState.selectedAudioPath }
     val deleteAudioTarget = state.audioLibrary.firstOrNull { it.path == routeState.deleteAudioPath }
     val standaloneResults = state.resultSessions.filter { it.recordingGroupId.isBlank() }
+    val resultSessionsById = state.resultSessions.associateBy(TranscriptionSessionStore.Checkpoint::sessionId)
     val consentCandidate = routeState.summaryConsentSource?.let { source ->
         summaryCandidateFor(source, state.resultSessions, state.recordingGroups)
+    }
+    val selectedSessionDocument = selected?.let(TranscriptSourceReader::fromCompletedSession)
+    val selectedGroupDocument = selectedGroup?.let {
+        TranscriptSourceReader.fromCompletedGroup(it, state.resultSessions)
+    }
+    val fullSessionDocument = fullTranscriptSession?.let(TranscriptSourceReader::fromCompletedSession)
+    val fullGroupDocument = fullTranscriptGroup?.let {
+        TranscriptSourceReader.fromCompletedGroup(it, state.resultSessions)
+    }
+
+    val saveDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument(TranscriptFileShareFactory.MIME_TYPE),
+    ) { uri ->
+        val pendingSource = routeViewModel.uiState.value.pendingExportSource
+        when {
+            uri == null -> routeViewModel.finishTranscriptExport("TXT 저장을 취소했습니다.")
+            pendingSource == null -> routeViewModel.finishTranscriptExport("저장할 전사를 다시 선택하세요.")
+            else -> {
+                val currentState = viewModel.uiState.value
+                val document = TranscriptSourceReader.resolve(
+                    pendingSource,
+                    currentState.resultSessions,
+                    currentState.recordingGroups,
+                )
+                if (document == null) {
+                    routeViewModel.finishTranscriptExport("저장할 완료 전사를 찾을 수 없습니다.")
+                } else {
+                    routeViewModel.beginTranscriptExport("TXT 파일을 저장하고 있습니다.")
+                    coroutineScope.launch {
+                        val saved = withContext(Dispatchers.IO) {
+                            runCatching { documentSaver.save(uri, document) }
+                        }
+                        routeViewModel.finishTranscriptExport(
+                            if (saved.isSuccess) {
+                                "전체 전사를 TXT 파일로 저장했습니다."
+                            } else {
+                                "TXT 저장에 실패했습니다. 저장 위치와 공간을 확인하세요."
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    val requestDocumentSave: (TranscriptSourceDocument) -> Unit = { document ->
+        if (!routeViewModel.uiState.value.exportInProgress) {
+            routeViewModel.requestTranscriptSave(document.source)
+            try {
+                saveDocumentLauncher.launch(TranscriptExportWriter.defaultFileName(document.updatedAtMs))
+            } catch (_: ActivityNotFoundException) {
+                routeViewModel.finishTranscriptExport("TXT 저장 위치를 선택할 앱을 찾을 수 없습니다.")
+            }
+        }
+    }
+    val requestFileShare: (TranscriptSourceDocument) -> Unit = { document ->
+        if (!routeViewModel.uiState.value.exportInProgress) {
+            routeViewModel.beginTranscriptExport("공유할 TXT 파일을 준비하고 있습니다.")
+            coroutineScope.launch {
+                val prepared = withContext(Dispatchers.IO) {
+                    runCatching { fileShareFactory.createChooser(document) }
+                }
+                prepared.fold(
+                    onSuccess = { chooser ->
+                        try {
+                            context.startActivity(chooser)
+                            routeViewModel.finishTranscriptExport("공유할 앱을 선택하세요.")
+                        } catch (_: ActivityNotFoundException) {
+                            routeViewModel.finishTranscriptExport("전체 전사 파일을 공유할 앱을 찾을 수 없습니다.")
+                        } catch (_: SecurityException) {
+                            routeViewModel.finishTranscriptExport("전체 전사 파일 공유 화면을 열 수 없습니다.")
+                        }
+                    },
+                    onFailure = {
+                        routeViewModel.finishTranscriptExport("공유 파일을 만들지 못했습니다. 저장 공간을 확인하세요.")
+                    },
+                )
+            }
+        }
     }
 
     LaunchedEffect(routeState, state.resultSessions, state.recordingGroups, state.audioLibrary) {
         if (routeState.selectedSessionId.isNotBlank() && selected == null) routeViewModel.dismissSession()
+        if (routeState.fullTranscriptSessionId.isNotBlank() && fullTranscriptSession == null) {
+            routeViewModel.dismissFullTranscript()
+        }
         if (routeState.deleteSessionId.isNotBlank() && deleteTarget == null) routeViewModel.dismissSessionDeletion()
         if (routeState.selectedGroupId.isNotBlank() && selectedGroup == null) routeViewModel.dismissGroup()
+        if (routeState.fullTranscriptGroupId.isNotBlank() && fullTranscriptGroup == null) {
+            routeViewModel.dismissFullTranscript()
+        }
         if (routeState.deleteGroupId.isNotBlank() && deleteGroupTarget == null) routeViewModel.dismissGroupDeletion()
         if (routeState.selectedAudioPath.isNotBlank() && selectedAudio == null) routeViewModel.dismissAudio()
         if (routeState.deleteAudioPath.isNotBlank() && deleteAudioTarget == null) routeViewModel.dismissAudioDeletion()
         if (routeState.summaryConsentSource != null && consentCandidate == null) routeViewModel.dismissSummaryConsent()
+        routeState.pendingExportSource?.let { pendingSource ->
+            val pendingDocument = TranscriptSourceReader.resolve(
+                pendingSource,
+                state.resultSessions,
+                state.recordingGroups,
+            )
+            if (pendingDocument == null) {
+                routeViewModel.finishTranscriptExport("저장할 완료 전사를 찾을 수 없습니다.")
+            }
+        }
+    }
+
+    LaunchedEffect(initialCompletedResult) {
+        initialCompletedResult?.let {
+            completedResultToOpen(it, state.resultSessions, state.recordingGroups)?.let(
+                routeViewModel::openCompletedResult,
+            )
+            onInitialCompletedResultHandled()
+        }
     }
 
     LazyColumn(
@@ -130,7 +277,19 @@ fun LibraryRoute(
             if (state.recordingGroups.isNotEmpty()) {
                 item { SectionLabel("녹음 그룹 ${state.recordingGroups.size}") }
                 items(state.recordingGroups, key = RecordingTranscriptionGroupStore.Group::groupId) { group ->
-                    RecordingGroupRow(group = group, onOpen = { routeViewModel.selectGroup(group.groupId) })
+                    RecordingGroupRow(
+                        group = group,
+                        summaryState = summaryState,
+                        summaryEligible = auth.phase == CodexAuthPhase.AUTHENTICATED &&
+                            group.status == RecordingTranscriptionGroupStore.GroupStatus.COMPLETED &&
+                            group.children.all { child ->
+                                resultSessionsById[child.sttSessionId]?.let { session ->
+                                    session.status == TranscriptionSessionStore.Status.COMPLETED &&
+                                        session.chunks.any { it.text.isNotBlank() }
+                                } == true
+                            },
+                        onOpen = { routeViewModel.selectGroup(group.groupId) },
+                    )
                 }
                 item { Spacer(Modifier.height(22.dp)) }
             }
@@ -140,6 +299,10 @@ fun LibraryRoute(
                 items(standaloneResults, key = { it.sessionId }) { session ->
                     TranscriptRow(
                         session = session,
+                        summaryState = summaryState,
+                        summaryEligible = auth.phase == CodexAuthPhase.AUTHENTICATED &&
+                            session.status == TranscriptionSessionStore.Status.COMPLETED &&
+                            session.chunks.any { it.text.isNotBlank() },
                         onOpen = { routeViewModel.selectSession(session.sessionId) },
                     )
                 }
@@ -178,6 +341,37 @@ fun LibraryRoute(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    SummaryResultSection(
+                        candidate = summaryCandidateFor(
+                            source = SummaryRequestPolicy.Source(
+                                SummarySessionStore.SourceType.RECORDING_GROUP,
+                                group.groupId,
+                            ),
+                            sessions = state.resultSessions,
+                            groups = state.recordingGroups,
+                        ),
+                        auth = auth,
+                        summaryState = summaryState,
+                        onRequest = routeViewModel::requestSummaryConsent,
+                        onShare = { summary -> shareSummary(context, summary) },
+                    )
+                    if (childSessions.any { session -> session.chunks.any { it.text.isNotBlank() } }) {
+                        OutlinedButton(
+                            onClick = { routeViewModel.showFullGroupTranscript(group.groupId) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .archiveTouchTarget()
+                                .semantics { contentDescription = "그룹 전사 전체 보기" },
+                        ) { Text("그룹 전사 전체 보기") }
+                    }
+                    selectedGroupDocument?.let { document ->
+                        TranscriptExportActions(
+                            inProgress = routeState.exportInProgress,
+                            statusMessage = routeState.exportStatusMessage,
+                            onSave = { requestDocumentSave(document) },
+                            onShare = { requestFileShare(document) },
+                        )
+                    }
                     group.children.forEach { child ->
                         val checkpoint = childSessions.firstOrNull { it.sessionId == child.sttSessionId }
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -195,19 +389,6 @@ fun LibraryRoute(
                             )
                         }
                     }
-                    SummaryResultSection(
-                        candidate = summaryCandidateFor(
-                            source = SummaryRequestPolicy.Source(
-                                SummarySessionStore.SourceType.RECORDING_GROUP,
-                                group.groupId,
-                            ),
-                            sessions = state.resultSessions,
-                            groups = state.recordingGroups,
-                        ),
-                        auth = auth,
-                        summaryState = summaryState,
-                        onRequest = routeViewModel::requestSummaryConsent,
-                    )
                 }
             },
             confirmButton = { TextButton(onClick = routeViewModel::dismissGroup) { Text("닫기") } },
@@ -297,18 +478,14 @@ fun LibraryRoute(
                 }
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     Text(
                         "${session.chunks.size}/${session.totalChunks} 구간 · ${formatDuration(session.durationMs)}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        result.text.ifBlank { "아직 저장된 전사 본문이 없습니다." },
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontFamily = FontFamily.SansSerif,
-                        maxLines = 18,
-                        overflow = TextOverflow.Ellipsis,
                     )
                     SummaryResultSection(
                         candidate = summaryCandidateFor(
@@ -322,6 +499,32 @@ fun LibraryRoute(
                         auth = auth,
                         summaryState = summaryState,
                         onRequest = routeViewModel::requestSummaryConsent,
+                        onShare = { summary -> shareSummary(context, summary) },
+                    )
+                    if (session.chunks.any { it.text.isNotBlank() }) {
+                        OutlinedButton(
+                            onClick = { routeViewModel.showFullSessionTranscript(session.sessionId) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .archiveTouchTarget()
+                                .semantics { contentDescription = "전사 전체 보기" },
+                        ) { Text("전사 전체 보기") }
+                    }
+                    selectedSessionDocument?.let { document ->
+                        TranscriptExportActions(
+                            inProgress = routeState.exportInProgress,
+                            statusMessage = routeState.exportStatusMessage,
+                            onSave = { requestDocumentSave(document) },
+                            onShare = { requestFileShare(document) },
+                        )
+                    }
+                    SectionLabel("전사 미리보기")
+                    Text(
+                        result.text.ifBlank { "아직 저장된 전사 본문이 없습니다." },
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontFamily = FontFamily.SansSerif,
+                        maxLines = 12,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             },
@@ -364,6 +567,203 @@ fun LibraryRoute(
             onDismiss = routeViewModel::dismissSummaryConsent,
         )
     }
+
+    fullTranscriptSession?.let { session ->
+        FullTranscriptDialog(
+            title = "전체 전사",
+            detail = "${session.chunks.size}/${session.totalChunks} 구간 · ${formatDuration(session.durationMs)}",
+            sections = session.chunks.sortedBy { it.index }.map { chunk ->
+                TranscriptViewerSection(
+                    key = "session-${chunk.index}",
+                    label = "구간 ${chunk.index + 1}/${session.totalChunks}",
+                    text = chunk.text.trim(),
+                )
+            },
+            inProgress = routeState.exportInProgress,
+            statusMessage = routeState.exportStatusMessage,
+            onSave = fullSessionDocument?.let { document -> { requestDocumentSave(document) } },
+            onShare = fullSessionDocument?.let { document -> { requestFileShare(document) } },
+            onDismiss = routeViewModel::dismissFullTranscript,
+        )
+    }
+
+    fullTranscriptGroup?.let { group ->
+        val sessionsById = state.resultSessions.associateBy(TranscriptionSessionStore.Checkpoint::sessionId)
+        val sections = group.children.sortedBy { it.sequence }.flatMap { child ->
+            sessionsById[child.sttSessionId]?.chunks.orEmpty().sortedBy { it.index }.map { chunk ->
+                TranscriptViewerSection(
+                    key = "group-${child.sequence}-${chunk.index}",
+                    label = "녹음 ${child.sequence + 1} · 구간 ${chunk.index + 1}",
+                    text = chunk.text.trim(),
+                )
+            }
+        }
+        FullTranscriptDialog(
+            title = "그룹 전체 전사",
+            detail = "녹음 ${group.children.size}개 · 전사 구간 ${sections.size}개",
+            sections = sections,
+            inProgress = routeState.exportInProgress,
+            statusMessage = routeState.exportStatusMessage,
+            onSave = fullGroupDocument?.let { document -> { requestDocumentSave(document) } },
+            onShare = fullGroupDocument?.let { document -> { requestFileShare(document) } },
+            onDismiss = routeViewModel::dismissFullTranscript,
+        )
+    }
+}
+
+internal fun completedResultToOpen(
+    target: CompletedResultTarget?,
+    sessions: List<TranscriptionSessionStore.Checkpoint>,
+    groups: List<RecordingTranscriptionGroupStore.Group>,
+): CompletedResultTarget? = target?.takeIf { it.isAvailable(sessions, groups) }
+
+internal data class TranscriptViewerSection(
+    val key: String,
+    val label: String,
+    val text: String,
+)
+
+@Composable
+internal fun FullTranscriptDialog(
+    title: String,
+    detail: String,
+    sections: List<TranscriptViewerSection>,
+    inProgress: Boolean = false,
+    statusMessage: String = "",
+    onSave: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 24.dp, end = 12.dp, top = 12.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            title,
+                            style = MaterialTheme.typography.headlineSmall,
+                            modifier = Modifier.semantics { heading() },
+                        )
+                        Text(
+                            detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.archiveTouchTarget(),
+                    ) { Text("닫기") }
+                }
+                if (onSave != null && onShare != null) {
+                    TranscriptExportActions(
+                        inProgress = inProgress,
+                        statusMessage = statusMessage,
+                        onSave = onSave,
+                        onShare = onShare,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+                    )
+                }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = 24.dp,
+                        end = 24.dp,
+                        top = 12.dp,
+                        bottom = 32.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    items(sections, key = TranscriptViewerSection::key) { section ->
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SectionLabel(section.label)
+                            SelectionContainer {
+                                Text(
+                                    section.text.ifBlank { "인식된 본문이 없는 구간입니다." },
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontFamily = FontFamily.SansSerif,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun TranscriptExportActions(
+    inProgress: Boolean,
+    statusMessage: String,
+    onSave: () -> Unit,
+    onShare: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            "TXT 저장과 파일 공유는 전사 원문 전체를 사용자가 선택한 앱 밖 위치로 복사합니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            onClick = onSave,
+            enabled = !inProgress,
+            modifier = Modifier
+                .fillMaxWidth()
+                .archiveTouchTarget()
+                .semantics { contentDescription = "전체 전사 TXT 저장" },
+        ) {
+            Icon(Icons.Outlined.SaveAlt, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("TXT 저장")
+        }
+        OutlinedButton(
+            onClick = onShare,
+            enabled = !inProgress,
+            modifier = Modifier
+                .fillMaxWidth()
+                .archiveTouchTarget()
+                .semantics { contentDescription = "전체 전사 파일 공유" },
+        ) {
+            Icon(Icons.Outlined.Share, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("파일로 공유")
+        }
+        if (inProgress) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        if (statusMessage.isNotBlank()) {
+            Text(
+                statusMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 internal data class SummaryCandidate(
@@ -376,31 +776,17 @@ private fun summaryCandidateFor(
     sessions: List<TranscriptionSessionStore.Checkpoint>,
     groups: List<RecordingTranscriptionGroupStore.Group>,
 ): SummaryCandidate? {
-    return when (source.type) {
-        SummarySessionStore.SourceType.TRANSCRIPTION_SESSION -> sessions
-            .firstOrNull { it.sessionId == source.id && it.status == TranscriptionSessionStore.Status.COMPLETED }
-            ?.toResult()
-            ?.text
-            ?.trim()
-            ?.takeIf(String::isNotBlank)
-            ?.let { SummaryCandidate(source, it) }
-
-        SummarySessionStore.SourceType.RECORDING_GROUP -> {
-            val group = groups.firstOrNull {
-                it.groupId == source.id && it.status == RecordingTranscriptionGroupStore.GroupStatus.COMPLETED
-            } ?: return null
-            val sessionsById = sessions.associateBy(TranscriptionSessionStore.Checkpoint::sessionId)
-            val transcript = group.children.sortedBy { it.sequence }.mapNotNull { child ->
-                sessionsById[child.sttSessionId]
-                    ?.takeIf { it.status == TranscriptionSessionStore.Status.COMPLETED }
-                    ?.toResult()
-                    ?.text
-                    ?.trim()
-                    ?.takeIf(String::isNotBlank)
-            }.takeIf { it.size == group.children.size }?.joinToString("\n")?.trim()
-            transcript?.takeIf(String::isNotBlank)?.let { SummaryCandidate(source, it) }
-        }
-    }
+    val transcriptSource = TranscriptSourceRef(
+        type = when (source.type) {
+            SummarySessionStore.SourceType.TRANSCRIPTION_SESSION -> TranscriptSourceType.TRANSCRIPTION_SESSION
+            SummarySessionStore.SourceType.RECORDING_GROUP -> TranscriptSourceType.RECORDING_GROUP
+        },
+        id = source.id,
+    )
+    return TranscriptSourceReader.resolve(transcriptSource, sessions, groups)
+        ?.joinedText()
+        ?.takeIf(String::isNotBlank)
+        ?.let { SummaryCandidate(source, it) }
 }
 
 @Composable
@@ -409,58 +795,178 @@ internal fun SummaryResultSection(
     auth: CodexAuthUiState,
     summaryState: SummaryUiState,
     onRequest: (SummaryRequestPolicy.Source) -> Unit,
+    onShare: (String) -> Unit = {},
 ) {
     val source = candidate?.source
     val entry = source?.let { candidateSource ->
         summaryState.entries.firstOrNull { it.source == candidateSource }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        HorizontalDivider()
-        Text("외부 요약", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "전사는 기기에 보관됩니다. 이 결과를 선택하고 동의할 때만 Codex로 전송합니다.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        when {
-            entry != null -> {
-                StatusPill("요약 완료", tone = ArchiveStatusTone.COMPLETE)
-                Text(entry.summary, style = MaterialTheme.typography.bodyMedium, maxLines = 12)
-            }
-            source != null && summaryState.activeSourceKey == source.key -> {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(summaryState.statusMessage, style = MaterialTheme.typography.bodyMedium)
-            }
-            candidate == null -> Text(
-                "내용이 있는 전체 완료 전사만 요약할 수 있습니다.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            auth.phase != CodexAuthPhase.AUTHENTICATED -> Text(
-                "설정에서 ChatGPT 연결을 완료하면 요약을 시작할 수 있습니다.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            summaryState.isRunning -> Text(
-                "다른 요약 작업이 진행 중입니다.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            else -> Button(
-                onClick = { onRequest(requireNotNull(source)) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .archiveTouchTarget()
-                    .semantics { contentDescription = "외부 요약 시작" },
-            ) { Text("외부 요약") }
-        }
-        if (entry == null && summaryState.statusMessage.isNotBlank() && !summaryState.isRunning) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("외부 요약", style = MaterialTheme.typography.titleMedium)
             Text(
-                summaryState.statusMessage,
+                "명시적으로 동의한 결과만 전송합니다. 긴 전사는 여러 구간으로 나눠 순차 요약합니다.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            when {
+                entry != null -> {
+                    StatusPill("요약 완료", tone = ArchiveStatusTone.COMPLETE)
+                    OutlinedButton(
+                        onClick = { onShare(entry.summary) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .archiveTouchTarget()
+                            .semantics { contentDescription = "완료 요약 공유" },
+                    ) {
+                        Icon(Icons.Outlined.Share, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("요약 공유")
+                    }
+                    Text(entry.summary, style = MaterialTheme.typography.bodyMedium)
+                }
+                source != null && summaryState.activeSourceKey == source.key -> {
+                    StatusPill(summaryState.stage.visibleLabel(), tone = ArchiveStatusTone.ACTIVE)
+                    LinearProgressIndicator(
+                        progress = { summaryState.progressFraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "${summaryState.completedSteps}/${summaryState.totalSteps} 단계 · " +
+                            "${(summaryState.progressFraction * 100).roundToInt()}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(summaryState.statusMessage, style = MaterialTheme.typography.bodyMedium)
+                }
+                candidate == null -> Text(
+                    "내용이 있는 전체 완료 전사만 요약할 수 있습니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                auth.phase != CodexAuthPhase.AUTHENTICATED -> Text(
+                    "설정에서 ChatGPT 연결을 완료하면 요약을 시작할 수 있습니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                summaryState.isRunning -> Text(
+                    "다른 요약 작업이 진행 중입니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> Button(
+                    onClick = { onRequest(requireNotNull(source)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .archiveTouchTarget()
+                        .semantics { contentDescription = "외부 요약 시작" },
+                ) { Text("외부 요약 시작") }
+            }
+            if (
+                entry == null &&
+                summaryState.statusMessage.isNotBlank() &&
+                !summaryState.isRunning &&
+                source?.key == summaryState.statusSourceKey
+            ) {
+                Text(
+                    summaryState.statusMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (summaryState.stage == SummaryStage.ERROR) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
         }
+    }
+}
+
+internal sealed interface SummaryListState {
+    data object Hidden : SummaryListState
+    data object Available : SummaryListState
+    data class Running(val progress: Float) : SummaryListState
+    data class Completed(val preview: String) : SummaryListState
+    data object Error : SummaryListState
+}
+
+internal fun summaryListState(
+    source: SummaryRequestPolicy.Source,
+    eligible: Boolean,
+    summaryState: SummaryUiState,
+): SummaryListState {
+    val entry = summaryState.entries.firstOrNull { it.source == source }
+    return when {
+        entry != null -> SummaryListState.Completed(entry.summary)
+        summaryState.activeSourceKey == source.key && summaryState.isRunning ->
+            SummaryListState.Running(summaryState.progressFraction)
+        summaryState.statusSourceKey == source.key && summaryState.stage == SummaryStage.ERROR ->
+            SummaryListState.Error
+        eligible -> SummaryListState.Available
+        else -> SummaryListState.Hidden
+    }
+}
+
+@Composable
+internal fun SummaryListIndicator(
+    state: SummaryListState,
+    modifier: Modifier = Modifier,
+) {
+    if (state == SummaryListState.Hidden) return
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        when (state) {
+            SummaryListState.Hidden -> Unit
+            SummaryListState.Available -> StatusPill("요약 가능")
+            SummaryListState.Error -> StatusPill("요약 확인 필요", tone = ArchiveStatusTone.ERROR)
+            is SummaryListState.Running -> {
+                val percent = (state.progress * 100).roundToInt()
+                StatusPill("요약 중 · $percent%", tone = ArchiveStatusTone.ACTIVE)
+                LinearProgressIndicator(
+                    progress = { state.progress.coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            is SummaryListState.Completed -> {
+                StatusPill("요약 완료", tone = ArchiveStatusTone.COMPLETE)
+                Text(
+                    state.preview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+private fun SummaryStage.visibleLabel(): String = when (this) {
+    SummaryStage.PREPARING -> "요약 준비"
+    SummaryStage.SUMMARIZING -> "구간 요약"
+    SummaryStage.SYNTHESIZING -> "요약 통합"
+    SummaryStage.SAVING -> "저장 중"
+    SummaryStage.ERROR -> "확인 필요"
+    SummaryStage.IDLE -> "대기"
+}
+
+private fun shareSummary(context: Context, summary: String) {
+    try {
+        val chooser = SummaryShareIntentFactory.createChooser(summary)
+        context.startActivity(chooser)
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, "요약을 공유할 앱을 찾을 수 없습니다.", Toast.LENGTH_SHORT).show()
+    } catch (_: SecurityException) {
+        Toast.makeText(context, "요약 공유 화면을 열 수 없습니다.", Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -474,7 +980,8 @@ internal fun SummaryConsentDialog(
         title = { Text("외부 요약을 시작할까요?") },
         text = {
             Text(
-                "선택한 완료 전사의 본문을 Codex 외부 서비스에 한 번 전송해 요약합니다. " +
+                "선택한 완료 전사의 본문을 Codex 외부 서비스에 전송해 요약합니다. " +
+                    "긴 전사는 제한된 크기의 여러 구간으로 나눠 순차 전송한 뒤 통합합니다. " +
                     "전사 원문은 자동 전송되지 않으며, 취소하면 전송하지 않습니다.",
             )
         },
@@ -486,8 +993,19 @@ internal fun SummaryConsentDialog(
 @Composable
 private fun TranscriptRow(
     session: TranscriptionSessionStore.Checkpoint,
+    summaryState: SummaryUiState,
+    summaryEligible: Boolean,
     onOpen: () -> Unit,
 ) {
+    val source = SummaryRequestPolicy.Source(
+        SummarySessionStore.SourceType.TRANSCRIPTION_SESSION,
+        session.sessionId,
+    )
+    val listState = summaryListState(
+        source = source,
+        eligible = summaryEligible,
+        summaryState = summaryState,
+    )
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(12.dp),
@@ -496,26 +1014,32 @@ private fun TranscriptRow(
                 .archiveTouchTarget()
                 .clickable(onClick = onOpen),
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Icon(Icons.Outlined.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    File(session.audioPath).name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    "${formatDate(session.updatedAtMs)} · ${session.chunks.size}/${session.totalChunks} 구간",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        File(session.audioPath).name,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "${formatDate(session.updatedAtMs)} · ${session.chunks.size}/${session.totalChunks} 구간",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                StatusPill(session.status.archiveLabel(), tone = session.status.archiveTone())
             }
-            StatusPill(session.status.archiveLabel(), tone = session.status.archiveTone())
+            SummaryListIndicator(state = listState, modifier = Modifier.padding(start = 36.dp, end = 8.dp))
         }
     }
 }
@@ -523,32 +1047,45 @@ private fun TranscriptRow(
 @Composable
 private fun RecordingGroupRow(
     group: RecordingTranscriptionGroupStore.Group,
+    summaryState: SummaryUiState,
+    summaryEligible: Boolean,
     onOpen: () -> Unit,
 ) {
+    val source = SummaryRequestPolicy.Source(
+        SummarySessionStore.SourceType.RECORDING_GROUP,
+        group.groupId,
+    )
+    val listState = summaryListState(source, summaryEligible, summaryState)
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth().archiveTouchTarget().clickable(onClick = onOpen),
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Icon(Icons.Outlined.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    if (group.isPartial) "보존 구간 녹음 전사" else "전체 녹음 순차 전사",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    "${formatDate(group.updatedAtMs)} · ${group.completedChildren}/${group.children.size} 청크" +
-                        if (group.isPartial) " · 제외 ${group.excludedSequences.size}" else "",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Description, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        if (group.isPartial) "보존 구간 녹음 전사" else "전체 녹음 순차 전사",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        "${formatDate(group.updatedAtMs)} · ${group.completedChildren}/${group.children.size} 청크" +
+                            if (group.isPartial) " · 제외 ${group.excludedSequences.size}" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                StatusPill(group.status.archiveLabel(), tone = group.status.archiveTone())
             }
-            StatusPill(group.status.archiveLabel(), tone = group.status.archiveTone())
+            SummaryListIndicator(state = listState, modifier = Modifier.padding(start = 36.dp, end = 8.dp))
         }
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
+import com.stt.benchmark.R
 import com.stt.benchmark.recording.RecordingPhase
 import com.stt.benchmark.recording.RecordingRuntimeSnapshot
 import com.stt.benchmark.ui.theme.SttBenchmarkTheme
@@ -74,6 +75,18 @@ class RecordingScreenStatesTest {
         )
         compose.onNodeWithText("안전 저장 중").assertIsDisplayed()
         compose.onNodeWithContentDescription("녹음 시작").assertIsNotEnabled()
+    }
+
+    @Test
+    fun recordingPhasesSelectTheDedicatedArtworkWithoutUnsafeSuccessFallback() {
+        assertEquals(R.drawable.art_recording_ready, recordingArtwork(RecordingPhase.IDLE).imageRes)
+        assertEquals(R.drawable.art_recording_ready, recordingArtwork(RecordingPhase.PREPARING).imageRes)
+        assertEquals(R.drawable.art_recording_active, recordingArtwork(RecordingPhase.RECORDING).imageRes)
+        assertEquals(R.drawable.art_recording_active, recordingArtwork(RecordingPhase.ROLLING_OVER).imageRes)
+        assertEquals(R.drawable.art_recording_active, recordingArtwork(RecordingPhase.FINALIZING).imageRes)
+        assertEquals(R.drawable.art_recording_saved, recordingArtwork(RecordingPhase.SAVED).imageRes)
+        assertEquals(R.drawable.art_recording_ready, recordingArtwork(RecordingPhase.FAILED).imageRes)
+        assertEquals(R.drawable.art_recording_ready, recordingArtwork(RecordingPhase.RECOVERY_REQUIRED).imageRes)
     }
 
     @Test

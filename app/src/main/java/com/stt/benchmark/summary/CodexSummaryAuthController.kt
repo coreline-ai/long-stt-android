@@ -46,8 +46,10 @@ class CodexSummaryAuthController(context: Context) {
         return collectText(CodexSummaryProfile.parityProbeRequest(), MAX_VISIBLE_PROBE_CHARS)
     }
 
-    suspend fun runUserApprovedSummary(requestJson: String): String =
-        collectText(requestJson, SummaryRequestPolicy.MAX_SUMMARY_CHARS)
+    suspend fun runUserApprovedSummary(
+        requestJson: String,
+        maxChars: Int = SummaryRequestPolicy.MAX_SUMMARY_CHARS,
+    ): String = collectText(requestJson, maxChars)
 
     private suspend fun collectText(requestJson: String, maxChars: Int): String {
         val response = session.stream(requestJson)

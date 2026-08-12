@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,7 +56,7 @@ import com.stt.benchmark.ui.settings.SettingsRoute
 import com.stt.benchmark.ui.transcription.TranscriptionRoute
 import com.stt.benchmark.ui.theme.SttBenchmarkTheme
 
-private enum class AppDestination(
+internal enum class AppDestination(
     val route: String,
     val label: String,
     val icon: ImageVector,
@@ -97,6 +98,9 @@ fun LongSttApp(
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
         val showNavigationLabels = shouldShowNavigationLabels(LocalDensity.current.fontScale)
+        var pendingResultType by rememberSaveable { mutableStateOf("") }
+        var pendingResultId by rememberSaveable { mutableStateOf("") }
+        val pendingCompletedResult = CompletedResultTarget.restore(pendingResultType, pendingResultId)
 
         Scaffold(
             modifier = modifier.fillMaxSize(),
@@ -113,12 +117,23 @@ fun LongSttApp(
                             selected = selected,
                             alwaysShowLabel = showNavigationLabels,
                             onClick = {
+                                val restoreDestinationState = shouldRestoreTopLevelState(destination)
+                                if (destination == AppDestination.LIBRARY) {
+                                    // Saved top-level destinations may restore without re-running
+                                    // the route LaunchedEffect, so refresh on every explicit tap.
+                                    sttViewModel.refreshLibraries()
+                                    codexAuthViewModel.refreshSummaryEntries()
+                                }
                                 navController.navigate(destination.route) {
                                     popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
+                                        // Library is a live archive view. Recreate it instead of
+                                        // restoring a stale saved entry or an old detail dialog.
+                                        // Recording is the start destination, so restoring state
+                                        // there can revive a previously saved child tab instead.
+                                        saveState = restoreDestinationState
                                     }
                                     launchSingleTop = true
-                                    restoreState = true
+                                    restoreState = restoreDestinationState
                                 }
                             },
                             icon = {
@@ -194,6 +209,18 @@ fun LongSttApp(
                                 launchSingleTop = true
                             }
                         },
+                        onOpenCompletedResult = { target ->
+                            pendingResultType = target.type.name
+                            pendingResultId = target.id
+                            sttViewModel.refreshLibraries()
+                            navController.navigate(AppDestination.LIBRARY.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = false
+                                }
+                                launchSingleTop = true
+                                restoreState = false
+                            }
+                        },
                     )
                 }
                 composable(AppDestination.LIBRARY.route) {
@@ -205,6 +232,11 @@ fun LongSttApp(
                             navController.navigate(AppDestination.TRANSCRIPTION.route) {
                                 launchSingleTop = true
                             }
+                        },
+                        initialCompletedResult = pendingCompletedResult,
+                        onInitialCompletedResultHandled = {
+                            pendingResultType = ""
+                            pendingResultId = ""
                         },
                     )
                 }
@@ -221,6 +253,21 @@ fun LongSttApp(
             }
         }
     }
+}
+
+/**
+ * The live archive is always recreated, while the graph start destination must be revealed
+ * directly. Restoring state for the start destination can restore a saved child back stack and
+ * leave the user on the tab they were trying to leave.
+ */
+internal fun shouldRestoreTopLevelState(destination: AppDestination): Boolean = when (destination) {
+    AppDestination.RECORDING,
+    AppDestination.LIBRARY,
+    -> false
+
+    AppDestination.TRANSCRIPTION,
+    AppDestination.SETTINGS,
+    -> true
 }
 
 @Composable

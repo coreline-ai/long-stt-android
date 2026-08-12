@@ -17,7 +17,10 @@ class SummaryRequestPolicyTest {
         val result = SummaryRequestPolicy.prepare(source, "테스트 전사 본문")
 
         assertTrue(result is SummaryRequestPolicy.Preparation.Ready)
-        val request = JSONObject((result as SummaryRequestPolicy.Preparation.Ready).requestJson)
+        val ready = result as SummaryRequestPolicy.Preparation.Ready
+        assertEquals(1, ready.transcriptParts.size)
+        assertEquals(1, ready.totalRequestCount)
+        val request = JSONObject(CodexSummaryProfile.userApprovedSummaryRequest(ready.transcriptParts.single()))
         assertEquals(CodexSummaryProfile.PARITY_MODEL, request.getString("model"))
         assertTrue(request.getBoolean("stream"))
         assertFalse(request.has("tools"))
@@ -25,14 +28,26 @@ class SummaryRequestPolicyTest {
     }
 
     @Test
-    fun blankAndOversizedTranscriptsAreRejectedBeforeTransport() {
+    fun blankAndOversizedSelectionsAreRejectedBeforeTransport() {
         assertTrue(SummaryRequestPolicy.prepare(source, "  ") is SummaryRequestPolicy.Preparation.Rejected)
         assertTrue(
             SummaryRequestPolicy.prepare(
                 source,
-                "x".repeat(SummaryRequestPolicy.MAX_TRANSCRIPT_CHARS + 1),
+                "x".repeat(SummaryRequestPolicy.MAX_TOTAL_TRANSCRIPT_CHARS + 1),
             ) is SummaryRequestPolicy.Preparation.Rejected,
         )
+    }
+
+    @Test
+    fun completedSixHourTranscriptIsSplitIntoBoundedHierarchicalRequests() {
+        val result = SummaryRequestPolicy.prepare(source, "가".repeat(166_870))
+
+        assertTrue(result is SummaryRequestPolicy.Preparation.Ready)
+        val ready = result as SummaryRequestPolicy.Preparation.Ready
+        assertEquals(17, ready.transcriptParts.size)
+        assertTrue(ready.transcriptParts.all { it.length <= SummaryRequestPolicy.MAX_TRANSCRIPT_CHARS })
+        assertEquals(21, ready.totalRequestCount)
+        assertTrue(SummaryRequestPolicy.synthesisBatches(ready.transcriptParts).all { it.size <= 8 })
     }
 
     @Test

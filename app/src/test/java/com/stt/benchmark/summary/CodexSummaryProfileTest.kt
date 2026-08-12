@@ -31,4 +31,19 @@ class CodexSummaryProfileTest {
         assertFalse(request.toString().contains("transcript", ignoreCase = true))
         assertEquals(1, request.getJSONArray("messages").length())
     }
+
+    @Test
+    fun longTranscriptRequestsStayStreamingAndToolFree() {
+        val partial = JSONObject(CodexSummaryProfile.partialSummaryRequest("선택 구간", 2, 4))
+        val synthesis = JSONObject(
+            CodexSummaryProfile.synthesisSummaryRequest(listOf("부분 1", "부분 2"), finalRound = true),
+        )
+
+        listOf(partial, synthesis).forEach { request ->
+            assertEquals(CodexSummaryProfile.PARITY_MODEL, request.getString("model"))
+            assertTrue(request.getBoolean("stream"))
+            assertFalse(request.has("tools"))
+            assertEquals(2, request.getJSONArray("messages").length())
+        }
+    }
 }

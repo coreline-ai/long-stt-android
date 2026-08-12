@@ -4,10 +4,12 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.stt.benchmark.data.MediaLibraryStore
+import com.stt.benchmark.ui.CompletedResultTarget
 import com.stt.benchmark.ui.SttViewModel
 import com.stt.benchmark.ui.theme.SttBenchmarkTheme
 import org.junit.Assert.assertTrue
@@ -95,11 +97,52 @@ class TranscriptionScreenTest {
         compose.onNodeWithText("전사 중").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("청크 2/4 처리 중").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("전사 중지").performScrollTo().assertIsEnabled()
+        compose.onNodeWithText("보관함에서 결과 보기").assertDoesNotExist()
+    }
+
+    @Test
+    fun completedStateOpensExactResultFromPersistentPrimaryAction() {
+        val target = CompletedResultTarget.create(
+            CompletedResultTarget.Type.TRANSCRIPTION_SESSION,
+            "stt_completed_1",
+        )!!
+        var opened: CompletedResultTarget? = null
+        render(
+            state = SttViewModel.UiState(
+                state = SttViewModel.SttState.DONE,
+                modelLoaded = true,
+                modelPath = "/managed/models/ggml-base.bin",
+                installedModels = listOf(model()),
+                audioPath = "/managed/audio.m4a",
+                audioPaths = listOf("/managed/audio.m4a"),
+                audioLibrary = listOf(audio()),
+                totalFiles = 1,
+                progress = 1f,
+                batchStatus = "전사 완료",
+                completedResultTarget = target,
+            ),
+            onOpenCompletedResult = { opened = it },
+        )
+
+        compose.onNodeWithContentDescription("완료 전사 보관함에서 보기")
+            .performScrollTo()
+            .assertIsEnabled()
+            .performClick()
+        assertTrue(opened == target)
+        compose.onNodeWithText("같은 오디오 다시 전사").performScrollTo().assertIsEnabled()
+    }
+
+    @Test
+    fun doneWithoutVerifiedTargetDoesNotExposeBrokenResultAction() {
+        render(state = SttViewModel.UiState(state = SttViewModel.SttState.DONE))
+
+        compose.onNodeWithText("보관함에서 결과 보기").assertDoesNotExist()
     }
 
     private fun render(
         state: SttViewModel.UiState,
         onOpenSettings: () -> Unit = {},
+        onOpenCompletedResult: (CompletedResultTarget) -> Unit = {},
     ) {
         compose.setContent {
             SttBenchmarkTheme(darkTheme = false) {
@@ -121,6 +164,7 @@ class TranscriptionScreenTest {
                     onRun = {},
                     onCancel = {},
                     onOpenSettings = onOpenSettings,
+                    onOpenCompletedResult = onOpenCompletedResult,
                 )
             }
         }

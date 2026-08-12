@@ -11,6 +11,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.json.JSONObject
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
@@ -39,6 +40,13 @@ class SummarySessionStoreTest {
         val json = File(context.filesDir, "summary_sessions/recording_group_recording_stt_123.json").readText()
         assertFalse(json.contains(transcript))
         assertFalse(json.contains("transcript", ignoreCase = true))
+        assertEquals(
+            setOf("version", "sourceType", "sourceId", "summary", "createdAtMs", "updatedAtMs"),
+            JSONObject(json).keys().asSequence().toSet(),
+        )
+        listOf("audioPath", "modelPath", "note", "accessToken", "refreshToken", "account").forEach { forbidden ->
+            assertFalse(json.contains(forbidden, ignoreCase = true))
+        }
     }
 
     @Test
