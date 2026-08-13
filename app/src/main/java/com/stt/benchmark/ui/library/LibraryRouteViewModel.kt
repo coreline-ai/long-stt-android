@@ -17,6 +17,7 @@ data class LibraryRouteUiState(
     val deleteSessionId: String = "",
     val selectedGroupId: String = "",
     val fullTranscriptGroupId: String = "",
+    val fullTranscriptInitialSectionKey: String = "",
     val deleteGroupId: String = "",
     val selectedAudioPath: String = "",
     val deleteAudioPath: String = "",
@@ -56,9 +57,10 @@ class LibraryRouteViewModel(
     val uiState: StateFlow<LibraryRouteUiState> = _uiState.asStateFlow()
 
     fun selectSession(id: String) = update(selectedSessionId = id)
-    fun showFullSessionTranscript(id: String) = update(
+    fun showFullSessionTranscript(id: String, initialSectionKey: String = "") = update(
         fullTranscriptSessionId = id,
         fullTranscriptGroupId = "",
+        fullTranscriptInitialSectionKey = initialSectionKey,
     )
     fun requestSessionDeletion(id: String) = update(selectedSessionId = "", deleteSessionId = id)
     fun selectGroup(id: String) = update(selectedGroupId = id)
@@ -68,6 +70,7 @@ class LibraryRouteViewModel(
             selectedGroupId = "",
             fullTranscriptSessionId = "",
             fullTranscriptGroupId = "",
+            fullTranscriptInitialSectionKey = "",
         )
 
         CompletedResultTarget.Type.RECORDING_GROUP -> update(
@@ -75,12 +78,18 @@ class LibraryRouteViewModel(
             selectedGroupId = target.id,
             fullTranscriptSessionId = "",
             fullTranscriptGroupId = "",
+            fullTranscriptInitialSectionKey = "",
         )
     }
-    fun showFullGroupTranscript(id: String) = update(
+    fun showFullGroupTranscript(id: String, initialSectionKey: String = "") = update(
         fullTranscriptSessionId = "",
         fullTranscriptGroupId = id,
+        fullTranscriptInitialSectionKey = initialSectionKey,
     )
+    fun openTranscriptCitation(target: CompletedResultTarget, sectionKey: String) = when (target.type) {
+        CompletedResultTarget.Type.TRANSCRIPTION_SESSION -> showFullSessionTranscript(target.id, sectionKey)
+        CompletedResultTarget.Type.RECORDING_GROUP -> showFullGroupTranscript(target.id, sectionKey)
+    }
     fun requestGroupDeletion(id: String) = update(selectedGroupId = "", deleteGroupId = id)
     fun selectAudio(path: String) = update(selectedAudioPath = path)
     fun requestAudioDeletion(path: String) = update(selectedAudioPath = "", deleteAudioPath = path)
@@ -106,7 +115,11 @@ class LibraryRouteViewModel(
     )
 
     fun dismissSession() = update(selectedSessionId = "")
-    fun dismissFullTranscript() = update(fullTranscriptSessionId = "", fullTranscriptGroupId = "")
+    fun dismissFullTranscript() = update(
+        fullTranscriptSessionId = "",
+        fullTranscriptGroupId = "",
+        fullTranscriptInitialSectionKey = "",
+    )
     fun dismissSessionDeletion() = update(deleteSessionId = "")
     fun dismissGroup() = update(selectedGroupId = "")
     fun dismissGroupDeletion() = update(deleteGroupId = "")
@@ -126,6 +139,7 @@ class LibraryRouteViewModel(
         deleteSessionId = savedStateHandle.get<String>(DELETE_SESSION).orEmpty(),
         selectedGroupId = savedStateHandle.get<String>(SELECTED_GROUP).orEmpty(),
         fullTranscriptGroupId = savedStateHandle.get<String>(FULL_TRANSCRIPT_GROUP).orEmpty(),
+        fullTranscriptInitialSectionKey = savedStateHandle.get<String>(FULL_TRANSCRIPT_INITIAL_SECTION).orEmpty(),
         deleteGroupId = savedStateHandle.get<String>(DELETE_GROUP).orEmpty(),
         selectedAudioPath = savedStateHandle.get<String>(SELECTED_AUDIO).orEmpty(),
         deleteAudioPath = savedStateHandle.get<String>(DELETE_AUDIO).orEmpty(),
@@ -141,6 +155,7 @@ class LibraryRouteViewModel(
         deleteSessionId: String = _uiState.value.deleteSessionId,
         selectedGroupId: String = _uiState.value.selectedGroupId,
         fullTranscriptGroupId: String = _uiState.value.fullTranscriptGroupId,
+        fullTranscriptInitialSectionKey: String = _uiState.value.fullTranscriptInitialSectionKey,
         deleteGroupId: String = _uiState.value.deleteGroupId,
         selectedAudioPath: String = _uiState.value.selectedAudioPath,
         deleteAudioPath: String = _uiState.value.deleteAudioPath,
@@ -157,6 +172,7 @@ class LibraryRouteViewModel(
             deleteSessionId = deleteSessionId,
             selectedGroupId = selectedGroupId,
             fullTranscriptGroupId = fullTranscriptGroupId,
+            fullTranscriptInitialSectionKey = fullTranscriptInitialSectionKey,
             deleteGroupId = deleteGroupId,
             selectedAudioPath = selectedAudioPath,
             deleteAudioPath = deleteAudioPath,
@@ -173,6 +189,7 @@ class LibraryRouteViewModel(
         savedStateHandle[DELETE_SESSION] = next.deleteSessionId
         savedStateHandle[SELECTED_GROUP] = next.selectedGroupId
         savedStateHandle[FULL_TRANSCRIPT_GROUP] = next.fullTranscriptGroupId
+        savedStateHandle[FULL_TRANSCRIPT_INITIAL_SECTION] = next.fullTranscriptInitialSectionKey
         savedStateHandle[DELETE_GROUP] = next.deleteGroupId
         savedStateHandle[SELECTED_AUDIO] = next.selectedAudioPath
         savedStateHandle[DELETE_AUDIO] = next.deleteAudioPath
@@ -188,6 +205,7 @@ class LibraryRouteViewModel(
         const val DELETE_SESSION = "library.deleteSession"
         const val SELECTED_GROUP = "library.selectedGroup"
         const val FULL_TRANSCRIPT_GROUP = "library.fullTranscriptGroup"
+        const val FULL_TRANSCRIPT_INITIAL_SECTION = "library.fullTranscriptInitialSection"
         const val DELETE_GROUP = "library.deleteGroup"
         const val SELECTED_AUDIO = "library.selectedAudio"
         const val DELETE_AUDIO = "library.deleteAudio"

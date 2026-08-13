@@ -185,7 +185,7 @@ class BenchmarkRecorder(private val context: Context) {
             output?.let { atomic.failWrite(it) }
             throw error
         }
-        AppLog.i(TAG, "결과 저장: ${csvFile.absolutePath}")
+        AppLog.i(TAG, "벤치마크 결과 저장 완료")
         return record
     }
 
@@ -267,7 +267,7 @@ class BenchmarkRecorder(private val context: Context) {
     } catch (_: java.io.FileNotFoundException) {
         null
     } catch (error: Exception) {
-        AppLog.e(TAG, "CSV 로드 실패: ${file.name}", error)
+        AppLog.e(TAG, "CSV 로드 실패", error)
         null
     }
 
@@ -281,7 +281,7 @@ class BenchmarkRecorder(private val context: Context) {
             true
         } catch (error: Exception) {
             output?.let { atomic.failWrite(it) }
-            AppLog.e(TAG, "CSV 저장 실패: ${file.name}", error)
+            AppLog.e(TAG, "CSV 저장 실패", error)
             false
         }
     }

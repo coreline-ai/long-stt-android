@@ -52,6 +52,47 @@ class ResponsiveLayoutContractTest {
     }
 
     @Test
+    @Config(qualifiers = "w360dp-h800dp")
+    fun compactPortraitKeepsCompletedResultActionsReachableAt200PercentFontScale() {
+        val target = CompletedResultTarget.create(
+            CompletedResultTarget.Type.TRANSCRIPTION_SESSION,
+            "stt_completed_1",
+        )!!
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(density = 1f, fontScale = 2f)) {
+                SttBenchmarkTheme(darkTheme = true) {
+                    TranscriptionScreen(
+                        state = SttViewModel.UiState(
+                            state = SttViewModel.SttState.DONE,
+                            modelLoaded = true,
+                            completedResultTarget = target,
+                        ),
+                        routeState = TranscriptionRouteUiState(),
+                        onOpenModelPicker = {},
+                        onOpenAudioPicker = {},
+                        onOpenAudioMenu = {},
+                        onDismissAudioMenu = {},
+                        onRequestAudioDeletion = {},
+                        onDismissDialog = {},
+                        onPickAudio = {},
+                        onSelectModel = {},
+                        onSelectAudio = {},
+                        onClearAudio = {},
+                        onForgetAudio = {},
+                        onDeleteAudio = {},
+                        onRun = {},
+                        onCancel = {},
+                        onOpenSettings = {},
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithText("보관함에서 결과 보기").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("같은 오디오 다시 전사").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
     @Config(qualifiers = "w915dp-h412dp-land")
     fun landscapeKeepsTranscriptionAndSettingsActionsReachableAt130PercentFontScale() {
         compose.setContent {

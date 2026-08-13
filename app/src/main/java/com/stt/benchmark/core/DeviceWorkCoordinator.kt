@@ -4,7 +4,7 @@ import java.util.UUID
 
 /** 녹음·전사·요약이 동시에 장시간 자원을 소유하지 못하게 하는 process-local lease. */
 class DeviceWorkCoordinator {
-    enum class Owner { RECORDING, TRANSCRIPTION, SUMMARY }
+    enum class Owner { RECORDING, TRANSCRIPTION, SUMMARY, CHAT }
     enum class LeaseState { ACTIVE, FINALIZING }
     enum class TerminalOutcome { COMPLETED, FAILED, CANCELLED }
 

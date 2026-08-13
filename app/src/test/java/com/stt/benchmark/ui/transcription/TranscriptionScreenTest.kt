@@ -139,6 +139,24 @@ class TranscriptionScreenTest {
         compose.onNodeWithText("보관함에서 결과 보기").assertDoesNotExist()
     }
 
+    @Test
+    fun restoredCompletedTargetRemainsAvailableAfterColdStartModelReady() {
+        val target = CompletedResultTarget.create(
+            CompletedResultTarget.Type.TRANSCRIPTION_SESSION,
+            "stt_completed_1",
+        )!!
+        render(
+            state = SttViewModel.UiState(
+                state = SttViewModel.SttState.READY,
+                modelLoaded = true,
+                completedResultTarget = target,
+            ),
+        )
+
+        compose.onNodeWithText("보관함에서 결과 보기").performScrollTo().assertIsEnabled()
+        compose.onNodeWithText("새 전사 시작").performScrollTo().assertIsNotEnabled()
+    }
+
     private fun render(
         state: SttViewModel.UiState,
         onOpenSettings: () -> Unit = {},

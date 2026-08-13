@@ -12,9 +12,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stt.benchmark.summary.CodexAuthViewModel
+import com.stt.benchmark.data.CompletedResultLaunchContract
+import com.stt.benchmark.ui.CompletedResultTarget
 import com.stt.benchmark.ui.LongSttApp
 import com.stt.benchmark.ui.SttViewModel
 import com.stt.benchmark.ui.theme.SttBenchmarkTheme
@@ -26,6 +31,8 @@ class MainActivity : ComponentActivity() {
 
     private var viewModel: SttViewModel? = null
     private var automationReceiverRegistered = false
+    private var completedResultLaunchTarget by mutableStateOf<CompletedResultTarget?>(null)
+    private var completedResultLaunchHandled = false
 
     /**
      * adb에서 전사 트리거용 BroadcastReceiver
@@ -51,6 +58,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        completedResultLaunchHandled = savedInstanceState?.getBoolean(
+            STATE_COMPLETED_RESULT_LAUNCH_HANDLED,
+            false,
+        ) == true
+        if (!completedResultLaunchHandled) {
+            completedResultLaunchTarget = CompletedResultLaunchContract.read(intent)
+                ?.let(CompletedResultTarget::fromStoredTarget)
+        }
 
         // 외부 adb 자동화 surface는 debug APK에만 노출한다.
         if (BuildConfig.DEBUG) {
@@ -71,7 +86,7 @@ class MainActivity : ComponentActivity() {
                 audioPath = i.getStringExtra("auto_audio"),
                 note = i.getStringExtra("auto_note"),
             )?.let { request ->
-                AppLog.i(TAG, "자동 전사 모드: ${request.note}")
+                AppLog.i(TAG, "자동 전사 요청 수신")
                 setContent {
                     SttBenchmarkTheme {
                         Surface(color = MaterialTheme.colorScheme.background) {
@@ -100,6 +115,11 @@ class MainActivity : ComponentActivity() {
             LongSttApp(
                 sttViewModel = vm,
                 codexAuthViewModel = codexAuthViewModel,
+                completedResultLaunchTarget = completedResultLaunchTarget,
+                onCompletedResultLaunchHandled = {
+                    completedResultLaunchTarget = null
+                    completedResultLaunchHandled = true
+                },
             )
         }
     }
@@ -108,13 +128,18 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.action == CompletedResultLaunchContract.ACTION_OPEN_COMPLETED_RESULT) {
+            completedResultLaunchTarget = CompletedResultLaunchContract.read(intent)
+                ?.let(CompletedResultTarget::fromStoredTarget)
+            completedResultLaunchHandled = completedResultLaunchTarget == null
+        }
         DebugTranscriptionRequest.create(
             enabled = BuildConfig.DEBUG,
             modelPath = intent.getStringExtra("auto_model"),
             audioPath = intent.getStringExtra("auto_audio"),
             note = intent.getStringExtra("auto_note"),
         )?.let { request ->
-            AppLog.i(TAG, "기존 화면에서 자동 전사 재요청: ${request.note}")
+            AppLog.i(TAG, "기존 화면에서 자동 전사 재요청 수신")
             viewModel?.loadAndTranscribe(request.modelPath, request.audioPath, request.note)
         }
     }
@@ -127,7 +152,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(STATE_COMPLETED_RESULT_LAUNCH_HANDLED, completedResultLaunchHandled)
+        super.onSaveInstanceState(outState)
+    }
+
     companion object {
         private const val TAG = "MainActivity"
+        private const val STATE_COMPLETED_RESULT_LAUNCH_HANDLED = "completed_result_launch_handled"
     }
 }

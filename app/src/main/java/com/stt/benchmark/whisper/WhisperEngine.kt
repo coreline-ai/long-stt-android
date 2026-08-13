@@ -62,7 +62,7 @@ class WhisperCppEngine(
     override fun loadModel(modelPath: String): Boolean {
         val modelFile = File(modelPath)
         if (!modelFile.exists()) {
-            AppLog.e(TAG, "모델 파일 없음: $modelPath")
+            AppLog.e(TAG, "모델 파일을 찾을 수 없음")
             return false
         }
 
@@ -75,14 +75,14 @@ class WhisperCppEngine(
 
         try {
             val localModel = ensureModelAccessible(modelPath)
-            AppLog.i(TAG, "모델 네이티브 로드 시도: ${localModel.absolutePath}")
+            AppLog.i(TAG, "모델 네이티브 로드 시도")
 
             ctx = WhisperLib.initContext(localModel.absolutePath)
             if (ctx == 0L) {
-                AppLog.e(TAG, "모델 로드 실패 (ctx == 0): ${localModel.absolutePath}")
+                AppLog.e(TAG, "모델 로드 실패 (ctx == 0)")
                 return false
             }
-            AppLog.i(TAG, "모델 로드 성공: ${localModel.name} (${localModel.length() / 1024 / 1024}MB), ctx=$ctx")
+            AppLog.i(TAG, "모델 로드 성공 (${localModel.length() / 1024 / 1024}MB), ctx=$ctx")
             isModelLoaded = true
             return true
         } catch (e: Exception) {
@@ -96,7 +96,7 @@ class WhisperCppEngine(
         require(isModelLoaded) { "모델이 로드되지 않음" }
 
         val audioFile = File(audioPath)
-        require(audioFile.exists()) { "오디오 파일 없음: $audioPath" }
+        require(audioFile.exists()) { "오디오 파일을 찾을 수 없습니다" }
 
         progressCallback?.invoke(0.1f)
 
@@ -104,7 +104,7 @@ class WhisperCppEngine(
         val modelSize = "${audioFile.length() / 1024 / 1024}MB"
 
         // 오디오 디코딩
-        AppLog.i(TAG, "오디오 디코딩: ${localAudio.name}")
+        AppLog.i(TAG, "오디오 디코딩 시작")
         val pcmFloats = AudioDecoder.decodeToFloatArray(localAudio.absolutePath)
         if (pcmFloats.isEmpty()) throw RuntimeException("오디오 디코딩 실패")
 
@@ -200,12 +200,12 @@ class WhisperCppEngine(
             return dst
         }
 
-        AppLog.i(TAG, "복사: ${src.absolutePath} → ${dst.absolutePath}")
+        AppLog.i(TAG, "앱 내부 파일 복사 시작")
         return try {
             src.inputStream().use { it.copyTo(dst.outputStream()) }
             dst
         } catch (e: Exception) {
-            AppLog.w(TAG, "복사 실패, 원본 사용: $path", e)
+            AppLog.w(TAG, "앱 내부 파일 복사 실패", e)
             src
         }
     }

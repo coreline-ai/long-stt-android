@@ -13,20 +13,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AudioFile
+import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -52,7 +49,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stt.benchmark.data.MediaLibraryStore
@@ -63,6 +59,7 @@ import com.stt.benchmark.data.TranscriptSourceReader
 import com.stt.benchmark.data.TranscriptSourceRef
 import com.stt.benchmark.data.TranscriptSourceType
 import com.stt.benchmark.export.TranscriptDocumentSaver
+import com.stt.benchmark.export.TranscriptDocumentLauncher
 import com.stt.benchmark.export.TranscriptExportWriter
 import com.stt.benchmark.export.TranscriptFileShareFactory
 import com.stt.benchmark.summary.CodexAuthPhase
@@ -70,15 +67,18 @@ import com.stt.benchmark.summary.CodexAuthUiState
 import com.stt.benchmark.summary.CodexAuthViewModel
 import com.stt.benchmark.summary.SummaryRequestPolicy
 import com.stt.benchmark.summary.SummarySessionStore
-import com.stt.benchmark.summary.SummaryShareIntentFactory
+import com.stt.benchmark.summary.SummaryShareLauncher
 import com.stt.benchmark.summary.SummaryStage
 import com.stt.benchmark.summary.SummaryUiState
 import com.stt.benchmark.ui.CompletedResultTarget
 import com.stt.benchmark.ui.SttViewModel
 import com.stt.benchmark.ui.common.ArchiveEmptyState
 import com.stt.benchmark.ui.common.ArchiveStatusTone
+import com.stt.benchmark.ui.common.FullTranscriptDialog
 import com.stt.benchmark.ui.common.SectionLabel
 import com.stt.benchmark.ui.common.StatusPill
+import com.stt.benchmark.ui.common.TranscriptExportActions
+import com.stt.benchmark.ui.common.TranscriptViewerSection
 import com.stt.benchmark.ui.common.archiveTouchTarget
 import com.stt.benchmark.ui.common.formatDuration
 import java.io.File
@@ -95,9 +95,11 @@ fun LibraryRoute(
     viewModel: SttViewModel,
     codexAuthViewModel: CodexAuthViewModel,
     onOpenTranscription: () -> Unit,
+    onOpenTranscriptChat: (TranscriptSourceRef) -> Unit = {},
     modifier: Modifier = Modifier,
     routeViewModel: LibraryRouteViewModel = viewModel(),
     initialCompletedResult: CompletedResultTarget? = null,
+    initialTranscriptSectionKey: String = "",
     onInitialCompletedResultHandled: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -172,10 +174,18 @@ fun LibraryRoute(
     val requestDocumentSave: (TranscriptSourceDocument) -> Unit = { document ->
         if (!routeViewModel.uiState.value.exportInProgress) {
             routeViewModel.requestTranscriptSave(document.source)
-            try {
-                saveDocumentLauncher.launch(TranscriptExportWriter.defaultFileName(document.updatedAtMs))
-            } catch (_: ActivityNotFoundException) {
-                routeViewModel.finishTranscriptExport("TXT 저장 위치를 선택할 앱을 찾을 수 없습니다.")
+            when (
+                TranscriptDocumentLauncher.launch {
+                    saveDocumentLauncher.launch(TranscriptExportWriter.defaultFileName(document.updatedAtMs))
+                }
+            ) {
+                TranscriptDocumentLauncher.Result.STARTED -> Unit
+                TranscriptDocumentLauncher.Result.NO_HANDLER -> {
+                    routeViewModel.finishTranscriptExport("TXT 저장 위치를 선택할 앱을 찾을 수 없습니다.")
+                }
+                TranscriptDocumentLauncher.Result.BLOCKED -> {
+                    routeViewModel.finishTranscriptExport("TXT 저장 위치 선택 화면을 열 수 없습니다.")
+                }
             }
         }
     }
@@ -231,12 +241,18 @@ fun LibraryRoute(
         }
     }
 
-    LaunchedEffect(initialCompletedResult) {
-        initialCompletedResult?.let {
-            completedResultToOpen(it, state.resultSessions, state.recordingGroups)?.let(
-                routeViewModel::openCompletedResult,
-            )
-            onInitialCompletedResultHandled()
+    LaunchedEffect(initialCompletedResult, initialTranscriptSectionKey, state.resultLibraryLoaded) {
+        if (shouldConsumeInitialCompletedResult(initialCompletedResult, state.resultLibraryLoaded)) {
+            initialCompletedResult?.let {
+                completedResultToOpen(it, state.resultSessions, state.recordingGroups)?.let { target ->
+                    if (initialTranscriptSectionKey.isBlank()) {
+                        routeViewModel.openCompletedResult(target)
+                    } else {
+                        routeViewModel.openTranscriptCitation(target, initialTranscriptSectionKey)
+                    }
+                }
+                onInitialCompletedResultHandled()
+            }
         }
     }
 
@@ -365,6 +381,20 @@ fun LibraryRoute(
                         ) { Text("그룹 전사 전체 보기") }
                     }
                     selectedGroupDocument?.let { document ->
+                        OutlinedButton(
+                            onClick = {
+                                routeViewModel.dismissGroup()
+                                onOpenTranscriptChat(document.source)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .archiveTouchTarget()
+                                .semantics { contentDescription = "그룹 전사와 대화" },
+                        ) {
+                            Icon(Icons.Outlined.Chat, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("전사와 대화")
+                        }
                         TranscriptExportActions(
                             inProgress = routeState.exportInProgress,
                             statusMessage = routeState.exportStatusMessage,
@@ -511,6 +541,20 @@ fun LibraryRoute(
                         ) { Text("전사 전체 보기") }
                     }
                     selectedSessionDocument?.let { document ->
+                        OutlinedButton(
+                            onClick = {
+                                routeViewModel.dismissSession()
+                                onOpenTranscriptChat(document.source)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .archiveTouchTarget()
+                                .semantics { contentDescription = "전사와 대화" },
+                        ) {
+                            Icon(Icons.Outlined.Chat, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("전사와 대화")
+                        }
                         TranscriptExportActions(
                             inProgress = routeState.exportInProgress,
                             statusMessage = routeState.exportStatusMessage,
@@ -572,13 +616,10 @@ fun LibraryRoute(
         FullTranscriptDialog(
             title = "전체 전사",
             detail = "${session.chunks.size}/${session.totalChunks} 구간 · ${formatDuration(session.durationMs)}",
-            sections = session.chunks.sortedBy { it.index }.map { chunk ->
-                TranscriptViewerSection(
-                    key = "session-${chunk.index}",
-                    label = "구간 ${chunk.index + 1}/${session.totalChunks}",
-                    text = chunk.text.trim(),
-                )
+            sections = fullSessionDocument?.sections.orEmpty().map { section ->
+                TranscriptViewerSection(section.key, section.label, section.text)
             },
+            initialSectionKey = routeState.fullTranscriptInitialSectionKey,
             inProgress = routeState.exportInProgress,
             statusMessage = routeState.exportStatusMessage,
             onSave = fullSessionDocument?.let { document -> { requestDocumentSave(document) } },
@@ -588,20 +629,14 @@ fun LibraryRoute(
     }
 
     fullTranscriptGroup?.let { group ->
-        val sessionsById = state.resultSessions.associateBy(TranscriptionSessionStore.Checkpoint::sessionId)
-        val sections = group.children.sortedBy { it.sequence }.flatMap { child ->
-            sessionsById[child.sttSessionId]?.chunks.orEmpty().sortedBy { it.index }.map { chunk ->
-                TranscriptViewerSection(
-                    key = "group-${child.sequence}-${chunk.index}",
-                    label = "녹음 ${child.sequence + 1} · 구간 ${chunk.index + 1}",
-                    text = chunk.text.trim(),
-                )
-            }
+        val sections = fullGroupDocument?.sections.orEmpty().map { section ->
+            TranscriptViewerSection(section.key, section.label, section.text)
         }
         FullTranscriptDialog(
             title = "그룹 전체 전사",
             detail = "녹음 ${group.children.size}개 · 전사 구간 ${sections.size}개",
             sections = sections,
+            initialSectionKey = routeState.fullTranscriptInitialSectionKey,
             inProgress = routeState.exportInProgress,
             statusMessage = routeState.exportStatusMessage,
             onSave = fullGroupDocument?.let { document -> { requestDocumentSave(document) } },
@@ -617,154 +652,10 @@ internal fun completedResultToOpen(
     groups: List<RecordingTranscriptionGroupStore.Group>,
 ): CompletedResultTarget? = target?.takeIf { it.isAvailable(sessions, groups) }
 
-internal data class TranscriptViewerSection(
-    val key: String,
-    val label: String,
-    val text: String,
-)
-
-@Composable
-internal fun FullTranscriptDialog(
-    title: String,
-    detail: String,
-    sections: List<TranscriptViewerSection>,
-    inProgress: Boolean = false,
-    statusMessage: String = "",
-    onSave: (() -> Unit)? = null,
-    onShare: (() -> Unit)? = null,
-    onDismiss: () -> Unit,
-) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background,
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding(),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 24.dp, end = 12.dp, top = 12.dp, bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            title,
-                            style = MaterialTheme.typography.headlineSmall,
-                            modifier = Modifier.semantics { heading() },
-                        )
-                        Text(
-                            detail,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.archiveTouchTarget(),
-                    ) { Text("닫기") }
-                }
-                if (onSave != null && onShare != null) {
-                    TranscriptExportActions(
-                        inProgress = inProgress,
-                        statusMessage = statusMessage,
-                        onSave = onSave,
-                        onShare = onShare,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-                    )
-                }
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        start = 24.dp,
-                        end = 24.dp,
-                        top = 12.dp,
-                        bottom = 32.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    items(sections, key = TranscriptViewerSection::key) { section ->
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SectionLabel(section.label)
-                            SelectionContainer {
-                                Text(
-                                    section.text.ifBlank { "인식된 본문이 없는 구간입니다." },
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontFamily = FontFamily.SansSerif,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun TranscriptExportActions(
-    inProgress: Boolean,
-    statusMessage: String,
-    onSave: () -> Unit,
-    onShare: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            "TXT 저장과 파일 공유는 전사 원문 전체를 사용자가 선택한 앱 밖 위치로 복사합니다.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedButton(
-            onClick = onSave,
-            enabled = !inProgress,
-            modifier = Modifier
-                .fillMaxWidth()
-                .archiveTouchTarget()
-                .semantics { contentDescription = "전체 전사 TXT 저장" },
-        ) {
-            Icon(Icons.Outlined.SaveAlt, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("TXT 저장")
-        }
-        OutlinedButton(
-            onClick = onShare,
-            enabled = !inProgress,
-            modifier = Modifier
-                .fillMaxWidth()
-                .archiveTouchTarget()
-                .semantics { contentDescription = "전체 전사 파일 공유" },
-        ) {
-            Icon(Icons.Outlined.Share, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("파일로 공유")
-        }
-        if (inProgress) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        if (statusMessage.isNotBlank()) {
-            Text(
-                statusMessage,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
+internal fun shouldConsumeInitialCompletedResult(
+    target: CompletedResultTarget?,
+    resultLibraryLoaded: Boolean,
+): Boolean = target != null && resultLibraryLoaded
 
 internal data class SummaryCandidate(
     val source: SummaryRequestPolicy.Source,
@@ -960,13 +851,14 @@ private fun SummaryStage.visibleLabel(): String = when (this) {
 }
 
 private fun shareSummary(context: Context, summary: String) {
-    try {
-        val chooser = SummaryShareIntentFactory.createChooser(summary)
-        context.startActivity(chooser)
-    } catch (_: ActivityNotFoundException) {
-        Toast.makeText(context, "요약을 공유할 앱을 찾을 수 없습니다.", Toast.LENGTH_SHORT).show()
-    } catch (_: SecurityException) {
-        Toast.makeText(context, "요약 공유 화면을 열 수 없습니다.", Toast.LENGTH_SHORT).show()
+    when (SummaryShareLauncher.launch(context, summary)) {
+        SummaryShareLauncher.Result.STARTED -> Unit
+        SummaryShareLauncher.Result.NO_HANDLER -> {
+            Toast.makeText(context, "요약을 공유할 앱을 찾을 수 없습니다.", Toast.LENGTH_SHORT).show()
+        }
+        SummaryShareLauncher.Result.BLOCKED -> {
+            Toast.makeText(context, "요약 공유 화면을 열 수 없습니다.", Toast.LENGTH_SHORT).show()
+        }
     }
 }
 

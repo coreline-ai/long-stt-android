@@ -96,7 +96,7 @@ object AudioDecoder {
 
             toWhisperFloats(raw.samples, raw.channels, raw.sampleRate)
         } catch (e: Exception) {
-            AppLog.e(TAG, "전체 디코딩 실패: $filePath", e)
+            AppLog.e(TAG, "전체 디코딩 실패", e)
             FloatArray(0)
         } finally {
             try { codec?.stop() } catch (_: Exception) {}
@@ -135,7 +135,7 @@ object AudioDecoder {
             val duration = format.getLong(MediaFormat.KEY_DURATION) / 1000L
             duration.takeIf { it > 0L }
         } catch (e: Exception) {
-            AppLog.w(TAG, "오디오 길이 조회 실패: $filePath", e)
+            AppLog.w(TAG, "오디오 길이 조회 실패", e)
             null
         } finally {
             try { extractor.release() } catch (_: Exception) {}
@@ -275,7 +275,7 @@ object AudioDecoder {
             )
             DecodedAudioWindow(floats, startMs, startMs + durationMs, decodedStartMs, decodedEndMs)
         } catch (e: Exception) {
-            AppLog.e(TAG, "압축 구간 디코드 실패: $filePath [$startMs+${durationMs}ms]", e)
+            AppLog.e(TAG, "압축 구간 디코드 실패 [$startMs+${durationMs}ms]", e)
             emptyWindow(startMs, startMs + durationMs)
         } finally {
             try { codec?.stop() } catch (_: Exception) {}

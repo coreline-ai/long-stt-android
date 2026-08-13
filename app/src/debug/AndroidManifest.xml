@@ -19,6 +19,9 @@
         <activity
             android:name=".DebugLongSingleFileAuditActivity"
             android:exported="true" />
+        <activity
+            android:name=".DebugTranscriptChatAuditActivity"
+            android:exported="true" />
 
     </application>
 </manifest>

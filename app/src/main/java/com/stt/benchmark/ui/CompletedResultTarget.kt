@@ -1,6 +1,7 @@
 package com.stt.benchmark.ui
 
 import com.stt.benchmark.data.RecordingTranscriptionGroupStore
+import com.stt.benchmark.data.CompletedResultTargetStore
 import com.stt.benchmark.data.TranscriptionSessionStore
 
 /** 전사 완료 화면에서 보관함 상세로 전달하는 원문 없는 불투명 결과 식별자. */
@@ -41,6 +42,15 @@ class CompletedResultTarget private constructor(
         fun restore(typeName: String, id: String): CompletedResultTarget? = Type.entries
             .firstOrNull { it.name == typeName }
             ?.let { create(it, id) }
+
+        fun fromStoredTarget(target: CompletedResultTargetStore.Target): CompletedResultTarget? =
+            create(
+                type = when (target.type) {
+                    CompletedResultTargetStore.Type.TRANSCRIPTION_SESSION -> Type.TRANSCRIPTION_SESSION
+                    CompletedResultTargetStore.Type.RECORDING_GROUP -> Type.RECORDING_GROUP
+                },
+                id = target.id,
+            )
 
         fun fromSession(session: TranscriptionSessionStore.Checkpoint): CompletedResultTarget? =
             if (

@@ -17,10 +17,11 @@ class NotificationContractsTest {
         val ids = setOf(
             RecorderNotificationFactory.NOTIFICATION_ID,
             TranscriptionService.NOTIFICATION_ID,
+            TranscriptionService.COMPLETION_NOTIFICATION_ID,
         )
 
         assertEquals(2, channels.size)
-        assertEquals(2, ids.size)
+        assertEquals(3, ids.size)
         assertTrue(channels.none(String::isBlank))
     }
 

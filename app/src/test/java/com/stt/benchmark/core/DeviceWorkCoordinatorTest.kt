@@ -70,4 +70,23 @@ class DeviceWorkCoordinatorTest {
                 is DeviceWorkCoordinator.AcquireResult.Acquired,
         )
     }
+
+    @Test
+    fun chatBlocksSummaryAndTranscriptionUntilTerminalRelease() {
+        val coordinator = DeviceWorkCoordinator()
+        val chat = coordinator.tryAcquire(DeviceWorkCoordinator.Owner.CHAT, "chat_1")
+            as DeviceWorkCoordinator.AcquireResult.Acquired
+
+        assertTrue(
+            coordinator.tryAcquire(DeviceWorkCoordinator.Owner.SUMMARY, "summary_1")
+                is DeviceWorkCoordinator.AcquireResult.Busy,
+        )
+        assertTrue(
+            coordinator.tryAcquire(DeviceWorkCoordinator.Owner.TRANSCRIPTION, "stt_1")
+                is DeviceWorkCoordinator.AcquireResult.Busy,
+        )
+        assertTrue(
+            coordinator.releaseAfterTerminal(chat.lease, DeviceWorkCoordinator.TerminalOutcome.COMPLETED),
+        )
+    }
 }

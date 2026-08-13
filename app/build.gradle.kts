@@ -109,6 +109,7 @@ val verifyReleaseSurface = tasks.register("verifyReleaseSurface") {
                 "DebugSttAuditActivity" !in manifestText &&
                 "DebugRecordingAuditActivity" !in manifestText &&
                 "DebugLongSingleFileAuditActivity" !in manifestText &&
+                "DebugTranscriptChatAuditActivity" !in manifestText &&
                 "com.google.android.aicore" !in manifestText,
         ) {
             "Release manifest must not expose Debug-only audit/probe activities"
@@ -226,6 +227,8 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Preserve any previously installed test-only package even when its signing key differs.
+        testApplicationId = "com.stt.benchmark.p1test"
 
         // whisper.cpp용 ABI 필터 (ARM64 우선)
         ndk {

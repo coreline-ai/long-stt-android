@@ -16,6 +16,8 @@ import com.stt.benchmark.R
 import com.stt.benchmark.core.DeviceWorkCoordinator
 import com.stt.benchmark.core.DeviceWorkRuntime
 import com.stt.benchmark.data.BenchmarkRecorder
+import com.stt.benchmark.data.CompletedResultTargetPolicy
+import com.stt.benchmark.data.CompletedResultTargetStore
 import com.stt.benchmark.data.TerminalCheckpointPersistence
 import com.stt.benchmark.data.TranscriptionLifecyclePolicy
 import com.stt.benchmark.data.TranscriptionPlan
@@ -52,6 +54,8 @@ class TranscriptionService : Service() {
     private val recorder by lazy { BenchmarkRecorder(this) }
     private val engine by lazy { WhisperCppEngine(this) }
     private val recordingCoordinator by lazy { RecordingTranscriptionCoordinator(this) }
+    private val completedResultTargetStore by lazy { CompletedResultTargetStore(this) }
+    private val completionNotifier by lazy { TranscriptionCompletionNotifier(this) }
 
     @Volatile private var activeJob: Job? = null
     @Volatile private var activeSessionId: String? = null
@@ -228,6 +232,7 @@ class TranscriptionService : Service() {
             publishActiveSnapshot("이미 전사 중입니다")
             return
         }
+        clearPreviousCompletedResult()
         startForegroundNow("전사 준비 중")
         cancelRequested = false
         activeJob = serviceScope.launch {
@@ -259,8 +264,9 @@ class TranscriptionService : Service() {
                 throw cancelled
             } catch (error: Throwable) {
                 AppLog.e(TAG, "세션 시작 실패", error)
-                checkpoint?.let { persistTerminal(it, TranscriptionSessionStore.Status.FAILED, error.message ?: "세션 시작 실패") }
-                    ?: publishTransientFailure(error.message ?: "세션 시작 실패")
+                checkpoint?.let {
+                    persistTerminal(it, TranscriptionSessionStore.Status.FAILED, "전사를 시작하지 못했습니다.")
+                } ?: publishTransientFailure("전사를 시작하지 못했습니다.")
             } finally {
                 finishRun(startId = null)
             }
@@ -276,6 +282,7 @@ class TranscriptionService : Service() {
             publishTransientFailure("${checkpoint.status.name} 상태의 전사는 재개할 수 없습니다")
             return
         }
+        clearPreviousCompletedResult()
         startForegroundNow("전사 재개 준비 중")
         cancelRequested = false
         activeSessionId = checkpoint.sessionId
@@ -295,7 +302,7 @@ class TranscriptionService : Service() {
                 throw cancelled
             } catch (error: Throwable) {
                 AppLog.e(TAG, "세션 재개 실패", error)
-                persistTerminal(checkpoint, TranscriptionSessionStore.Status.FAILED, error.message ?: "세션 재개 실패")
+                persistTerminal(checkpoint, TranscriptionSessionStore.Status.FAILED, "전사를 재개하지 못했습니다.")
             } finally {
                 finishRun(startId = null)
             }
@@ -484,8 +491,11 @@ class TranscriptionService : Service() {
         detail: String
     ) {
         withContext(Dispatchers.IO) { store.save(checkpoint) }
-        if (checkpoint.status in TERMINAL_STATUSES) {
+        val completedTarget = if (checkpoint.status in TERMINAL_STATUSES) {
             prepareRecordingGroupHandoff(checkpoint, detail)
+        } else null
+        if (completedTarget != null) {
+            withContext(Dispatchers.IO) { completedResultTargetStore.save(completedTarget) }
         }
         publishStatus(
             checkpoint.sessionId,
@@ -495,6 +505,7 @@ class TranscriptionService : Service() {
             checkpoint.totalChunks,
             detail.ifBlank { checkpoint.errorMessage }
         )
+        if (completedTarget != null) completionNotifier.post(completedTarget)
     }
 
     /**
@@ -505,8 +516,10 @@ class TranscriptionService : Service() {
     private fun prepareRecordingGroupHandoff(
         checkpoint: TranscriptionSessionStore.Checkpoint,
         detail: String,
-    ) {
-        if (checkpoint.recordingGroupId.isBlank() || checkpoint.mediaId.isBlank()) return
+    ): CompletedResultTargetStore.Target? {
+        if (checkpoint.recordingGroupId.isBlank() || checkpoint.mediaId.isBlank()) {
+            return CompletedResultTargetPolicy.fromStandaloneSession(checkpoint)
+        }
         val result = recordingCoordinator.onChildEvent(
             RecordingTranscriptionCoordinator.ChildEvent(
                 groupId = checkpoint.recordingGroupId,
@@ -519,6 +532,8 @@ class TranscriptionService : Service() {
         if (result is RecordingTranscriptionCoordinator.EventResult.Updated && result.launchNext) {
             pendingGroupLaunch = recordingCoordinator.prepareCurrentLaunch(result.group.groupId)?.request
         }
+        return (result as? RecordingTranscriptionCoordinator.EventResult.Updated)?.group
+            ?.let(CompletedResultTargetPolicy::fromRecordingGroup)
     }
 
     private fun launchPreparedGroupChild(
@@ -597,7 +612,7 @@ class TranscriptionService : Service() {
             }
         }
         throw IllegalStateException(
-            "청크 $chunkIndex 재시도 후 실패: ${lastFailure?.message ?: "알 수 없는 오류"}",
+            "청크 $chunkIndex 재시도 후 실패",
             lastFailure
         )
     }
@@ -706,6 +721,11 @@ class TranscriptionService : Service() {
         )
         .build()
 
+    private fun clearPreviousCompletedResult() {
+        completedResultTargetStore.clear()
+        completionNotifier.cancel()
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
@@ -808,6 +828,7 @@ class TranscriptionService : Service() {
         /** Stable and intentionally separate from RecorderNotificationFactory's recording identity. */
         internal const val CHANNEL_ID = "long_transcription"
         internal const val NOTIFICATION_ID = 6_001
+        internal const val COMPLETION_NOTIFICATION_ID = 6_002
         private const val COVERAGE_TOLERANCE_MS = 50L
         private const val SHORT_COOLDOWN_MS = 10_000L
         private const val LONG_COOLDOWN_MS = 30_000L

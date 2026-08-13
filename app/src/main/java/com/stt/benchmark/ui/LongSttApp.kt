@@ -47,6 +47,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.stt.benchmark.summary.CodexAuthViewModel
+import com.stt.benchmark.data.TranscriptSourceReader
+import com.stt.benchmark.data.TranscriptSourceRef
+import com.stt.benchmark.data.TranscriptSourceType
+import com.stt.benchmark.ui.chat.TranscriptChatRoute
 import com.stt.benchmark.ui.library.LibraryRoute
 import com.stt.benchmark.ui.onboarding.OnboardingPreferences
 import com.stt.benchmark.ui.onboarding.OnboardingScreen
@@ -67,10 +71,14 @@ internal enum class AppDestination(
     SETTINGS("settings", "설정", Icons.Default.Settings),
 }
 
+private const val TRANSCRIPT_CHAT_ROUTE = "transcript_chat/{sourceType}/{sourceId}"
+
 @Composable
 fun LongSttApp(
     sttViewModel: SttViewModel,
     codexAuthViewModel: CodexAuthViewModel,
+    completedResultLaunchTarget: CompletedResultTarget? = null,
+    onCompletedResultLaunchHandled: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -102,11 +110,27 @@ fun LongSttApp(
         var pendingResultId by rememberSaveable { mutableStateOf("") }
         val pendingCompletedResult = CompletedResultTarget.restore(pendingResultType, pendingResultId)
 
+        LaunchedEffect(completedResultLaunchTarget) {
+            completedResultLaunchTarget?.let { target ->
+                pendingResultType = target.type.name
+                pendingResultId = target.id
+                sttViewModel.refreshLibraries()
+                navController.navigate(AppDestination.LIBRARY.route) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = false
+                    }
+                    launchSingleTop = true
+                    restoreState = false
+                }
+                onCompletedResultLaunchHandled()
+            }
+        }
+
         Scaffold(
             modifier = modifier.fillMaxSize(),
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                NavigationBar(
+                if (currentDestination?.route != TRANSCRIPT_CHAT_ROUTE) NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                 ) {
                     AppDestination.entries.forEach { destination ->
@@ -238,6 +262,25 @@ fun LongSttApp(
                             pendingResultType = ""
                             pendingResultId = ""
                         },
+                        onOpenTranscriptChat = { source ->
+                            navController.navigate("transcript_chat/${source.type.name}/${source.id}")
+                        },
+                    )
+                }
+                composable(TRANSCRIPT_CHAT_ROUTE) { entry ->
+                    val source = runCatching {
+                        TranscriptSourceRef(
+                            TranscriptSourceType.valueOf(entry.arguments?.getString("sourceType").orEmpty()),
+                            entry.arguments?.getString("sourceId").orEmpty(),
+                        )
+                    }.getOrNull()
+                    val state = sttViewModel.uiState.collectAsStateWithLifecycle().value
+                    val document = source?.let {
+                        TranscriptSourceReader.resolve(it, state.resultSessions, state.recordingGroups)
+                    }
+                    TranscriptChatRoute(
+                        document = document,
+                        onBack = { navController.popBackStack() },
                     )
                 }
                 composable(AppDestination.SETTINGS.route) {

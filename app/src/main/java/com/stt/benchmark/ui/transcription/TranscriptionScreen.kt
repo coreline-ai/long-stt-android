@@ -1,6 +1,9 @@
 package com.stt.benchmark.ui.transcription
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -39,8 +42,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -49,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.content.ContextCompat
 import com.stt.benchmark.data.MediaLibraryStore
 import com.stt.benchmark.ui.CompletedResultTarget
 import com.stt.benchmark.ui.SttViewModel
@@ -69,6 +77,16 @@ fun TranscriptionRoute(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val routeState by routeViewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var runAfterNotificationPermission by rememberSaveable { mutableStateOf(false) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        if (runAfterNotificationPermission) {
+            runAfterNotificationPermission = false
+            viewModel.runBenchmark()
+        }
+    }
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let(viewModel::copyAudioFromUri)
     }
@@ -97,13 +115,32 @@ fun TranscriptionRoute(
         onClearAudio = viewModel::clearAudioSelection,
         onForgetAudio = viewModel::forgetAudioFromLibrary,
         onDeleteAudio = viewModel::deleteAudioPermanently,
-        onRun = viewModel::runBenchmark,
+        onRun = {
+            val shouldRequestPermission = shouldRequestTranscriptionNotificationPermission(
+                sdkInt = Build.VERSION.SDK_INT,
+                notificationsGranted = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED,
+            )
+            if (shouldRequestPermission) {
+                runAfterNotificationPermission = true
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                viewModel.runBenchmark()
+            }
+        },
         onCancel = viewModel::cancelActiveSession,
         onOpenSettings = onOpenSettings,
         onOpenCompletedResult = onOpenCompletedResult,
         modifier = modifier,
     )
 }
+
+internal fun shouldRequestTranscriptionNotificationPermission(
+    sdkInt: Int,
+    notificationsGranted: Boolean,
+): Boolean = sdkInt >= Build.VERSION_CODES.TIRAMISU && !notificationsGranted
 
 @Composable
 fun TranscriptionScreen(
@@ -448,7 +485,7 @@ private fun TranscriptionRunSection(
                     )
                 }
                 val completedTarget = state.completedResultTarget
-                if (state.state == SttViewModel.SttState.DONE && completedTarget != null) {
+                if (completedTarget != null) {
                     Button(
                         onClick = { onOpenCompletedResult(completedTarget) },
                         modifier = Modifier
@@ -467,7 +504,13 @@ private fun TranscriptionRunSection(
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(6.dp))
-                        Text("같은 오디오 다시 전사")
+                        Text(
+                            if (state.state == SttViewModel.SttState.DONE) {
+                                "같은 오디오 다시 전사"
+                            } else {
+                                "새 전사 시작"
+                            },
+                        )
                     }
                 } else {
                     Button(

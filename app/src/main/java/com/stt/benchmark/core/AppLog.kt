@@ -22,11 +22,11 @@ internal object AppLog {
 
     fun w(tag: String, message: String, error: Throwable? = null) {
         if (!BuildConfig.DEBUG) return
-        if (error == null) Log.w(tag, message) else Log.w(tag, message, error)
+        Log.w(tag, error?.let { "$message (${it.javaClass.simpleName})" } ?: message)
     }
 
     fun e(tag: String, message: String, error: Throwable? = null) {
         if (!BuildConfig.DEBUG) return
-        if (error == null) Log.e(tag, message) else Log.e(tag, message, error)
+        Log.e(tag, error?.let { "$message (${it.javaClass.simpleName})" } ?: message)
     }
 }

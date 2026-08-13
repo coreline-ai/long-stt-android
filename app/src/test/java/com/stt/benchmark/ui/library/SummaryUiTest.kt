@@ -1,12 +1,16 @@
 package com.stt.benchmark.ui.library
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.Density
 import com.stt.benchmark.summary.CodexAuthPhase
 import com.stt.benchmark.summary.CodexAuthUiState
 import com.stt.benchmark.summary.SummaryRequestPolicy
@@ -14,6 +18,9 @@ import com.stt.benchmark.summary.SummarySessionStore
 import com.stt.benchmark.summary.SummaryStage
 import com.stt.benchmark.summary.SummaryUiState
 import com.stt.benchmark.ui.CompletedResultTarget
+import com.stt.benchmark.ui.common.FullTranscriptDialog
+import com.stt.benchmark.ui.common.TranscriptExportActions
+import com.stt.benchmark.ui.common.TranscriptViewerSection
 import com.stt.benchmark.ui.theme.SttBenchmarkTheme
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -120,6 +127,8 @@ class SummaryUiTest {
     @Test
     fun fullTranscriptViewerExposesEverySectionAndCloseAction() {
         var dismissed = false
+        var saved = false
+        var shared = false
         compose.setContent {
             SttBenchmarkTheme {
                 FullTranscriptDialog(
@@ -129,6 +138,8 @@ class SummaryUiTest {
                         TranscriptViewerSection("first", "구간 1/2", "첫 번째 전체 본문"),
                         TranscriptViewerSection("second", "구간 2/2", "두 번째 전체 본문"),
                     ),
+                    onSave = { saved = true },
+                    onShare = { shared = true },
                     onDismiss = { dismissed = true },
                 )
             }
@@ -137,6 +148,10 @@ class SummaryUiTest {
         compose.onNodeWithText("전체 전사").assertExists()
         compose.onNodeWithText("첫 번째 전체 본문").assertExists()
         compose.onNodeWithText("두 번째 전체 본문").assertExists()
+        compose.onNodeWithText("TXT 저장").performClick()
+        compose.onNodeWithText("파일로 공유").performClick()
+        assertTrue(saved)
+        assertTrue(shared)
         compose.onNodeWithText("닫기").performClick()
         assertTrue(dismissed)
     }
@@ -228,6 +243,41 @@ class SummaryUiTest {
     }
 
     @Test
+    @Config(qualifiers = "w360dp-h800dp")
+    fun compactPortraitKeepsCompletedSummaryShareReachableAt200PercentFontScale() {
+        val source = SummaryRequestPolicy.Source(
+            SummarySessionStore.SourceType.TRANSCRIPTION_SESSION,
+            "stt_123",
+        )
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(density = 1f, fontScale = 2f)) {
+                SttBenchmarkTheme {
+                    SummaryResultSection(
+                        candidate = SummaryCandidate(source, "synthetic transcript"),
+                        auth = CodexAuthUiState(),
+                        summaryState = SummaryUiState(
+                            entries = listOf(
+                                SummarySessionStore.Entry(
+                                    source = source,
+                                    summary = "synthetic completed summary",
+                                    createdAtMs = 1L,
+                                    updatedAtMs = 1L,
+                                ),
+                            ),
+                        ),
+                        onRequest = {},
+                        onShare = {},
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithText("요약 완료").assertIsDisplayed()
+        compose.onNodeWithContentDescription("완료 요약 공유")
+            .assertIsDisplayed()
+    }
+
+    @Test
     fun transcriptExportActionsSeparatePersistentSaveFromFileShare() {
         var saved = false
         var shared = false
@@ -278,5 +328,17 @@ class SummaryUiTest {
         )!!
 
         assertTrue(completedResultToOpen(target, emptyList(), emptyList()) == null)
+    }
+
+    @Test
+    fun coldStartCompletedResultWaitsForFirstLibraryLoadBeforeConsumption() {
+        val target = CompletedResultTarget.create(
+            CompletedResultTarget.Type.TRANSCRIPTION_SESSION,
+            "stt_completed_1",
+        )!!
+
+        assertTrue(!shouldConsumeInitialCompletedResult(target, resultLibraryLoaded = false))
+        assertTrue(shouldConsumeInitialCompletedResult(target, resultLibraryLoaded = true))
+        assertTrue(!shouldConsumeInitialCompletedResult(null, resultLibraryLoaded = true))
     }
 }
