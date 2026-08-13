@@ -7,7 +7,22 @@
 
 ### 긴 음성을 놓치지 않고, 기기 안에서 안전한 기록으로 남깁니다.
 
-직접 녹음과 장시간 `whisper.cpp` 전사, 체크포인트 복구, 전체 보기·내보내기, 선택적 외부 요약과 전사 근거 채팅을 하나로 연결한 Android 앱입니다.
+**KR** · 직접 녹음과 장시간 `whisper.cpp` 전사, 체크포인트 복구, 전체 보기·내보내기, 선택적 외부 요약과 전사 근거 채팅을 하나로 연결한 Android 앱입니다.
+
+**EN** · An Android app for resilient long-form recording, on-device `whisper.cpp` transcription, checkpoint recovery, secure local archives, and optional transcript-grounded AI features.
+
+<p>
+  <code>android</code>
+  <code>kotlin</code>
+  <code>jetpack-compose</code>
+  <code>speech-to-text</code>
+  <code>stt</code>
+  <code>whisper-cpp</code>
+  <code>voice-recorder</code>
+  <code>long-form-audio</code>
+  <code>on-device-ai</code>
+  <code>local-first</code>
+</p>
 
 <p>
   <img src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Android 8.0 이상" />
