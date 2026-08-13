@@ -2,6 +2,9 @@
 
 # Long STT Android
 
+<img width="2752" height="1536" alt="안전한_모바일_음성_전사_서비스" src="https://github.com/user-attachments/assets/60852d00-4f9d-4a06-8248-e66de92988ab" />
+
+
 ### 긴 음성을 놓치지 않고, 기기 안에서 안전한 기록으로 남깁니다.
 
 직접 녹음과 장시간 `whisper.cpp` 전사, 체크포인트 복구, 전체 보기·내보내기, 선택적 외부 요약과 전사 근거 채팅을 하나로 연결한 Android 앱입니다.
