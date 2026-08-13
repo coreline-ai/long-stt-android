@@ -34,9 +34,13 @@ Without Coreline's prior written permission, you may not:
 
 ## 4. Commercial and distribution requests
 
+No commercial-use or external-distribution permission is currently granted.
 Commercial use, external distribution, proprietary licensing, support, joint
-development, or other use outside Section 2 requires a separate written
-agreement with Coreline.
+development, or other use outside Section 2 may be authorized only through a
+separate written agreement with Coreline. For a release that includes
+Codex-related integration, that agreement may be considered only after the
+applicable Codex-related rights, licensing, and code-provenance process is
+formally completed.
 
 ## 5. Third-party components
 
