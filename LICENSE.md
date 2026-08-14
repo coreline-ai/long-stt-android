@@ -7,7 +7,9 @@ Copyright (c) 2026 Coreline. All rights reserved.
 This license applies only to source code and other materials in this repository
 for which Coreline owns the copyright or has the right to grant this license
 (the “Coreline Materials”). Third-party components remain subject to their own
-license terms and notices.
+license terms and notices. For clarity, this license does not restrict
+Coreline, as the copyright owner or rights holder, from using, modifying, or
+distributing the Coreline Materials.
 
 ## 2. Permitted use
 
@@ -34,13 +36,12 @@ Without Coreline's prior written permission, you may not:
 
 ## 4. Commercial and distribution requests
 
-No commercial-use or external-distribution permission is currently granted.
-Commercial use, external distribution, proprietary licensing, support, joint
-development, or other use outside Section 2 may be authorized only through a
-separate written agreement with Coreline. For a release that includes
-Codex-related integration, that agreement may be considered only after the
-applicable Codex-related rights, licensing, and code-provenance process is
-formally completed.
+No commercial-use or external-distribution permission is granted to licensees
+other than Coreline. Commercial use, external distribution, proprietary
+licensing, support, joint development, or other use outside Section 2 may be
+authorized only through a separate written agreement with Coreline. A
+Codex-related integration does not by itself create a separate official
+distribution-approval requirement.
 
 ## 5. Third-party components
 

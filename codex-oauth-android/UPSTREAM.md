@@ -12,7 +12,9 @@
 | 이식 목적 | STT 앱과 분리된 Codex OAuth/Responses 기반 모듈의 source parity 검증 |
 
 이 모듈은 Alpine runtime, PRoot, chat UI, 다른 Provider 전용 contract를 포함하지 않는다.
-현재 `:app`은 이 모듈에 의존하지 않으므로 앱의 manifest나 제품 동작에는 아직 영향을 주지 않는다.
+현재 `:app`은 요약·전사 채팅의 명시적 사용자 동의 경계 안에서 이 모듈에 의존한다. 이 모듈의
+manifest는 OAuth redirect activity와 인터넷 권한을 제공하며, 로그인 또는 외부 요청은 사용자의
+명시적 조작 없이는 시작하지 않는다.
 
 ## 이식한 production source 19개
 
@@ -118,7 +120,7 @@ source parity를 먼저 고정하기 위해 다음 변경은 아직 적용하지
 
 고정 원본 저장소에는 프로젝트 전체 코드에 적용되는 루트 `LICENSE`가 없고, 원본의
 `distribution/PROJECT_LICENSE_STATUS.md`도 현 산출물을 내부 개발·검증용으로 제한한다.
-따라서 이 모듈은 현재 **내부 개발·검증 전용**이며, 배포 상태는 **임시 차단 (BLOCKED)** 이다.
-Codex 관련 권리·라이선스·코드 provenance의 정식 처리와 Coreline의 서면 배포 승인이 완료되기 전에는
-공개 저장소·Maven·앱 스토어·제3자 배포를 진행할 수 없다. 빌드·테스트 통과는 배포 승인이 아니며,
-이 문서는 라이선스를 부여하지 않는다.
+위 상태는 제3자에게 프로젝트 코드의 일반 배포 권한을 부여하지 않는다는 뜻이다. Coreline은 이
+source-parity 구성요소를 포함한 자체 릴리스·배포 여부를 결정할 수 있으며, Codex 관련 연동만으로
+별도의 “Codex 정식 배포 승인”이 필요한 것은 아니다. 실제 릴리스 시에는 제3자 구성요소의 고지·
+라이선스와 적용 서비스 약관을 확인한다. 이 문서는 제3자에게 별도 라이선스를 부여하지 않는다.
