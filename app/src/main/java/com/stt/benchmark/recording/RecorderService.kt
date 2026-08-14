@@ -35,11 +35,16 @@ class RecorderService : Service() {
     private var backend: RecorderBackend? = null
     private var lease: DeviceWorkCoordinator.Lease? = null
     private var rolloverJob: Job? = null
+    private var routeConfirmationJob: Job? = null
     private var tickerJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var activeStartId: Int = 0
     private var inputRouteEpoch: Long = 0L
+    @Volatile
     private var activeInputRoute: RecordingInputRoute = RecordingInputRoute.UNKNOWN
+    private var confirmedInputRoute: RecordingInputRoute = RecordingInputRoute.UNKNOWN
+    @Volatile
+    private var runtimeMessage: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -91,6 +96,8 @@ class RecorderService : Service() {
             is RecorderCommandActor.Command.Start -> handleStart(command.startId)
             is RecorderCommandActor.Command.Stop -> handleStop(command.startId)
             is RecorderCommandActor.Command.Rollover -> handleRollover(command)
+            is RecorderCommandActor.Command.InputRouteObserved -> handleInputRouteObserved(command)
+            is RecorderCommandActor.Command.InputRouteUnavailable -> handleInputRouteUnavailable(command)
             is RecorderCommandActor.Command.BackendFailure -> handleBackendFailure(command)
         }
 
@@ -119,6 +126,7 @@ class RecorderService : Service() {
         }
         lease = acquired.lease
         val now = System.currentTimeMillis()
+        runtimeMessage = ""
         machine = transition(RecordingEvent.StartRequested(sessionId))
         currentSession = RecordingSessionStore.RecordingSession(
             sessionId = sessionId,
@@ -177,9 +185,113 @@ class RecorderService : Service() {
 
     private suspend fun handleRollover(
         command: RecorderCommandActor.Command.Rollover,
+    ): RecorderCommandActor.Outcome = rolloverCurrentChunk(
+        sessionId = command.sessionId,
+        chunkIndex = command.chunkIndex,
+    )
+
+    private suspend fun handleInputRouteObserved(
+        command: RecorderCommandActor.Command.InputRouteObserved,
     ): RecorderCommandActor.Outcome {
         val session = currentSession ?: return RecorderCommandActor.Outcome.Ignored("활성 녹음 없음")
-        if (session.sessionId != command.sessionId || session.currentChunkIndex != command.chunkIndex) {
+        if (
+            !RecordingInputRouteTransitionPolicy.isCurrentObservation(
+                expectedSessionId = session.sessionId,
+                expectedChunkIndex = session.currentChunkIndex,
+                expectedRouteEpoch = inputRouteEpoch,
+                observedSessionId = command.sessionId,
+                observedChunkIndex = command.chunkIndex,
+                observedRouteEpoch = command.routeEpoch,
+            ) ||
+            machine.phase !in ACTIVE_PHASES
+        ) {
+            return RecorderCommandActor.Outcome.Ignored("오래된 입력 경로 관찰")
+        }
+
+        activeInputRoute = command.route
+        publishRuntime()
+        if (machine.phase != RecordingPhase.RECORDING) {
+            routeConfirmationJob?.cancel()
+            routeConfirmationJob = null
+            if (command.route != RecordingInputRoute.UNKNOWN) confirmedInputRoute = command.route
+            return RecorderCommandActor.Outcome.Accepted
+        }
+
+        val decision = RecordingInputRouteTransitionPolicy.decide(
+            confirmedRoute = confirmedInputRoute,
+            observedRoute = command.route,
+        )
+
+        return when (decision) {
+            RecordingInputRouteTransitionPolicy.Decision.INITIALIZED -> {
+                routeConfirmationJob?.cancel()
+                routeConfirmationJob = null
+                confirmedInputRoute = command.route
+                RecorderCommandActor.Outcome.Accepted
+            }
+            RecordingInputRouteTransitionPolicy.Decision.UNCHANGED -> {
+                if (command.route != RecordingInputRoute.UNKNOWN) {
+                    routeConfirmationJob?.cancel()
+                    routeConfirmationJob = null
+                }
+                RecorderCommandActor.Outcome.Accepted
+            }
+            RecordingInputRouteTransitionPolicy.Decision.AWAITING_REPLACEMENT -> {
+                scheduleRouteLossConfirmation(command, confirmedInputRoute)
+                RecorderCommandActor.Outcome.Accepted
+            }
+            RecordingInputRouteTransitionPolicy.Decision.CHANGED -> {
+                routeConfirmationJob?.cancel()
+                routeConfirmationJob = null
+                confirmedInputRoute = command.route
+                runtimeMessage = ROUTE_SWITCHING_MESSAGE
+                publishRuntime()
+                rolloverCurrentChunk(
+                    sessionId = command.sessionId,
+                    chunkIndex = command.chunkIndex,
+                    continuationMessage = ROUTE_SWITCHED_MESSAGE,
+                )
+            }
+        }
+    }
+
+    private suspend fun handleInputRouteUnavailable(
+        command: RecorderCommandActor.Command.InputRouteUnavailable,
+    ): RecorderCommandActor.Outcome {
+        routeConfirmationJob = null
+        val session = currentSession ?: return RecorderCommandActor.Outcome.Ignored("활성 녹음 없음")
+        if (
+            !RecordingInputRouteTransitionPolicy.isCurrentObservation(
+                expectedSessionId = session.sessionId,
+                expectedChunkIndex = session.currentChunkIndex,
+                expectedRouteEpoch = inputRouteEpoch,
+                observedSessionId = command.sessionId,
+                observedChunkIndex = command.chunkIndex,
+                observedRouteEpoch = command.routeEpoch,
+            ) ||
+            machine.phase != RecordingPhase.RECORDING ||
+            activeInputRoute != RecordingInputRoute.UNKNOWN ||
+            confirmedInputRoute != command.previousRoute
+        ) {
+            return RecorderCommandActor.Outcome.Ignored("복구되었거나 오래된 입력 경로")
+        }
+        confirmedInputRoute = RecordingInputRoute.UNKNOWN
+        runtimeMessage = ROUTE_SWITCHING_MESSAGE
+        publishRuntime()
+        return rolloverCurrentChunk(
+            sessionId = command.sessionId,
+            chunkIndex = command.chunkIndex,
+            continuationMessage = ROUTE_SWITCHED_MESSAGE,
+        )
+    }
+
+    private suspend fun rolloverCurrentChunk(
+        sessionId: String,
+        chunkIndex: Int,
+        continuationMessage: String? = null,
+    ): RecorderCommandActor.Outcome {
+        val session = currentSession ?: return RecorderCommandActor.Outcome.Ignored("활성 녹음 없음")
+        if (session.sessionId != sessionId || session.currentChunkIndex != chunkIndex) {
             return RecorderCommandActor.Outcome.Ignored("오래된 rollover")
         }
         if (machine.phase != RecordingPhase.RECORDING) {
@@ -198,6 +310,10 @@ class RecorderService : Service() {
         machine = transition(RecordingEvent.RolloverCompleted)
         return try {
             startChunk(machine.currentChunkIndex)
+            continuationMessage?.let {
+                runtimeMessage = it
+                publishRuntime()
+            }
             RecorderCommandActor.Outcome.Accepted
         } catch (error: Throwable) {
             terminalFailure("다음 녹음 청크를 시작하지 못했습니다.")
@@ -222,8 +338,11 @@ class RecorderService : Service() {
             else -> error("청크 시작 preflight 실패")
         }
         renewWakeLock()
+        routeConfirmationJob?.cancel()
+        routeConfirmationJob = null
         val routeEpoch = ++inputRouteEpoch
         activeInputRoute = RecordingInputRoute.UNKNOWN
+        confirmedInputRoute = RecordingInputRoute.UNKNOWN
         val started = backendFactory.start(
             sessionId = session.sessionId,
             chunkIndex = chunkIndex,
@@ -239,11 +358,17 @@ class RecorderService : Service() {
                 }
             },
             onInputRoute = { route ->
-                // Audio-routing callbacks can arrive late when a chunk is changing. Keep only the
-                // currently-starting chunk's generic category and never persist device identifiers.
-                if (inputRouteEpoch == routeEpoch && machine.phase in ACTIVE_PHASES) {
-                    activeInputRoute = route
-                    publishRuntime()
+                // Keep route state changes in the actor mailbox. The command contains only a
+                // generic category; epoch/session/chunk checks discard late callbacks.
+                serviceScope.launch {
+                    commandActor.submit(
+                        RecorderCommandActor.Command.InputRouteObserved(
+                            sessionId = session.sessionId,
+                            chunkIndex = chunkIndex,
+                            routeEpoch = routeEpoch,
+                            route = route,
+                        )
+                    )
                 }
             },
         )
@@ -363,6 +488,24 @@ class RecorderService : Service() {
         }
     }
 
+    private fun scheduleRouteLossConfirmation(
+        command: RecorderCommandActor.Command.InputRouteObserved,
+        previousRoute: RecordingInputRoute,
+    ) {
+        routeConfirmationJob?.cancel()
+        routeConfirmationJob = serviceScope.launch {
+            delay(ROUTE_LOSS_CONFIRMATION_MS)
+            commandActor.submit(
+                RecorderCommandActor.Command.InputRouteUnavailable(
+                    sessionId = command.sessionId,
+                    chunkIndex = command.chunkIndex,
+                    routeEpoch = command.routeEpoch,
+                    previousRoute = previousRoute,
+                )
+            )
+        }
+    }
+
     private fun startTicker() {
         tickerJob?.cancel()
         var lastNotificationSecond = -1L
@@ -375,11 +518,12 @@ class RecorderService : Service() {
                     RecordingRuntimeSnapshot(
                         phase = machine.phase,
                         sessionId = session.sessionId,
-                currentChunkIndex = session.currentChunkIndex,
-                elapsedMs = elapsed,
-                amplitude = normalizedAmplitude.coerceIn(0f, 1f),
-                inputRoute = activeInputRoute,
-            )
+                        currentChunkIndex = session.currentChunkIndex,
+                        elapsedMs = elapsed,
+                        amplitude = normalizedAmplitude.coerceIn(0f, 1f),
+                        inputRoute = activeInputRoute,
+                        message = runtimeMessage,
+                    )
                 )
                 val second = elapsed / 1_000L
                 if (second / 5L != lastNotificationSecond / 5L) {
@@ -391,7 +535,7 @@ class RecorderService : Service() {
         }
     }
 
-    private fun publishRuntime(message: String = "") {
+    private fun publishRuntime() {
         val session = currentSession
         RecordingRuntime.publish(
             RecordingRuntimeSnapshot(
@@ -401,7 +545,7 @@ class RecorderService : Service() {
                 elapsedMs = session?.startedAtMs?.takeIf { it > 0L }
                     ?.let { (System.currentTimeMillis() - it).coerceAtLeast(0L) } ?: 0L,
                 inputRoute = activeInputRoute,
-                message = message,
+                message = runtimeMessage,
             )
         )
     }
@@ -424,6 +568,8 @@ class RecorderService : Service() {
         terminalStartId: Int = activeStartId,
     ): RecorderCommandActor.Outcome {
         rolloverJob?.cancel()
+        routeConfirmationJob?.cancel()
+        routeConfirmationJob = null
         tickerJob?.cancel()
         if (backend != null && currentSession != null) {
             runCatching { withContext(NonCancellable + Dispatchers.IO) { finalizeCurrentChunk() } }
@@ -461,9 +607,13 @@ class RecorderService : Service() {
             )
         }
         lease = null
+        routeConfirmationJob?.cancel()
+        routeConfirmationJob = null
         releaseWakeLock()
         activeInputRoute = RecordingInputRoute.UNKNOWN
-        publishRuntime(if (saved) "녹음이 저장되었습니다." else currentSession?.errorMessage.orEmpty())
+        confirmedInputRoute = RecordingInputRoute.UNKNOWN
+        runtimeMessage = if (saved) "녹음이 저장되었습니다." else currentSession?.errorMessage.orEmpty()
+        publishRuntime()
         currentSession = null
         removeForeground()
         notifications.notifyTerminal(saved)
@@ -476,6 +626,7 @@ class RecorderService : Service() {
 
     private fun publishFailure(message: String) {
         machine = RecordingState(phase = RecordingPhase.FAILED, message = message)
+        runtimeMessage = message
         RecordingRuntime.publish(RecordingRuntimeSnapshot(phase = RecordingPhase.FAILED, message = message))
     }
 
@@ -507,6 +658,7 @@ class RecorderService : Service() {
 
     override fun onDestroy() {
         rolloverJob?.cancel()
+        routeConfirmationJob?.cancel()
         tickerJob?.cancel()
         val abandoned = currentSession
         if (abandoned != null && abandoned.phase in ACTIVE_PHASES) {
@@ -525,6 +677,7 @@ class RecorderService : Service() {
         currentSession = null
         lease = null
         activeInputRoute = RecordingInputRoute.UNKNOWN
+        confirmedInputRoute = RecordingInputRoute.UNKNOWN
         releaseWakeLock()
         commandActor.close()
         serviceScope.cancel()
@@ -535,6 +688,11 @@ class RecorderService : Service() {
         const val ACTION_START = "com.stt.benchmark.recording.action.START"
         const val ACTION_STOP = "com.stt.benchmark.recording.action.STOP"
         private const val WAKE_LOCK_TAG = "LongStt:Recorder"
+        private const val ROUTE_LOSS_CONFIRMATION_MS = 1_500L
+        private const val ROUTE_SWITCHING_MESSAGE =
+            "입력 장치 변경을 감지해 현재 파일을 안전하게 저장하는 중입니다."
+        private const val ROUTE_SWITCHED_MESSAGE =
+            "입력 장치 변경 후 새 파일에서 녹음을 이어가고 있습니다."
         private const val WAKE_LOCK_TIMEOUT_MS = RecordingSessionStore.DEFAULT_CHUNK_DURATION_MS + 5L * 60L * 1_000L
         private val ACTIVE_PHASES = setOf(
             RecordingPhase.PREPARING,

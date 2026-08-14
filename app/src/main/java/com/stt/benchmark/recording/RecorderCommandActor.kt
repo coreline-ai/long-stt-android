@@ -6,7 +6,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
-/** START/STOP/rollover/backend completion을 단일 mailbox에서 순서대로 처리한다. */
+/** START/STOP/rollover/input-route/backend completion을 단일 mailbox에서 순서대로 처리한다. */
 class RecorderCommandActor(
     scope: CoroutineScope,
     private val handler: suspend (Command) -> Outcome,
@@ -16,6 +16,18 @@ class RecorderCommandActor(
         data class Start(val startId: Int) : Command
         data class Stop(val startId: Int) : Command
         data class Rollover(val sessionId: String, val chunkIndex: Int) : Command
+        data class InputRouteObserved(
+            val sessionId: String,
+            val chunkIndex: Int,
+            val routeEpoch: Long,
+            val route: RecordingInputRoute,
+        ) : Command
+        data class InputRouteUnavailable(
+            val sessionId: String,
+            val chunkIndex: Int,
+            val routeEpoch: Long,
+            val previousRoute: RecordingInputRoute,
+        ) : Command
         data class BackendFailure(
             val sessionId: String,
             val chunkIndex: Int,

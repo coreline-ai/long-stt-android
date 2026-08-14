@@ -18,7 +18,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [26, 34])
 class TranscriptionCompletionNotifierTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private val manager get() = context.getSystemService(NotificationManager::class.java)
@@ -42,8 +42,9 @@ class TranscriptionCompletionNotifierTest {
         }
         assertEquals(1, active.size)
         val contentIntent = active.single().notification.contentIntent
-        val launchIntent = shadowOf(contentIntent).savedIntent
-        assertTrue(contentIntent.isImmutable)
+        val pendingIntentShadow = shadowOf(contentIntent)
+        val launchIntent = pendingIntentShadow.savedIntent
+        assertTrue(pendingIntentShadow.isImmutable)
         assertEquals(MainActivity::class.java.name, launchIntent.component?.className)
         assertEquals(CompletedResultLaunchContract.ACTION_OPEN_COMPLETED_RESULT, launchIntent.action)
         assertEquals(target, CompletedResultLaunchContract.read(launchIntent))

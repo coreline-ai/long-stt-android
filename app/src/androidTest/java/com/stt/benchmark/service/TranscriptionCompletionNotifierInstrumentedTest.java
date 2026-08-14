@@ -10,6 +10,7 @@ import android.app.NotificationManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.ParcelFileDescriptor;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import com.stt.benchmark.data.CompletedResultTargetStore;
@@ -26,11 +27,15 @@ public class TranscriptionCompletionNotifierInstrumentedTest {
     private TranscriptionCompletionNotifier notifier;
 
     @Before
-    public void setUp() {
+    public void setUp() throws Exception {
         context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         assertTrue(context.getPackageName().endsWith(".deviceTest"));
         manager = context.getSystemService(NotificationManager.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+                grantNotificationPermission();
+            }
             assertEquals(
                     PackageManager.PERMISSION_GRANTED,
                     context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -50,8 +55,8 @@ public class TranscriptionCompletionNotifierInstrumentedTest {
 
     @After
     public void tearDown() {
-        notifier.cancel();
-        new CompletedResultTargetStore(context).clear();
+        if (notifier != null) notifier.cancel();
+        if (context != null) new CompletedResultTargetStore(context).clear();
     }
 
     @Test
@@ -84,5 +89,16 @@ public class TranscriptionCompletionNotifierInstrumentedTest {
                 .getNotification()
                 .contentIntent
                 .isImmutable());
+    }
+
+    private void grantNotificationPermission() throws Exception {
+        ParcelFileDescriptor descriptor = InstrumentationRegistry.getInstrumentation()
+                .getUiAutomation()
+                .executeShellCommand(
+                        "pm grant " + context.getPackageName() + " "
+                                + Manifest.permission.POST_NOTIFICATIONS
+                );
+        descriptor.close();
+        Thread.sleep(300L);
     }
 }

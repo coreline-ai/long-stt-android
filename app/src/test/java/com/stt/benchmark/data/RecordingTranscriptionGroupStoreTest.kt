@@ -1,6 +1,7 @@
 package com.stt.benchmark.data
 
 import android.content.Context
+import android.content.ContextWrapper
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -12,16 +13,26 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.nio.file.Files
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class RecordingTranscriptionGroupStoreTest {
-    private val context get() = ApplicationProvider.getApplicationContext<Context>()
+    private lateinit var testRoot: File
+    private lateinit var context: Context
 
     @Before
+    fun setUp() {
+        testRoot = Files.createTempDirectory("long-stt-group-store").toFile()
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
+        context = object : ContextWrapper(appContext) {
+            override fun getFilesDir(): File = testRoot
+        }
+    }
+
     @After
     fun clean() {
-        File(context.filesDir, "recording_transcription_groups").deleteRecursively()
+        if (::testRoot.isInitialized) testRoot.deleteRecursively()
     }
 
     @Test

@@ -289,7 +289,9 @@ fun RecordingScreen(
                         MaterialTheme.colorScheme.surfaceVariant
                     },
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { liveRegion = LiveRegionMode.Polite },
                 ) {
                     Text(
                         state.message,

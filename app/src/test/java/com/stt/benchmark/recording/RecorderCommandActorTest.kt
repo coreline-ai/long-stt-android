@@ -61,4 +61,36 @@ class RecorderCommandActorTest {
         actor.close()
         scope.cancel()
     }
+
+    @Test
+    fun inputRouteObservationCannotOvertakeAnEarlierStop() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val order = mutableListOf<String>()
+        val actor = RecorderCommandActor(scope) { command ->
+            order += when (command) {
+                is RecorderCommandActor.Command.Stop -> "stop"
+                is RecorderCommandActor.Command.InputRouteObserved -> "route"
+                else -> "other"
+            }
+            RecorderCommandActor.Outcome.Accepted
+        }
+
+        val stop = async { actor.submit(RecorderCommandActor.Command.Stop(startId = 2)) }
+        val route = async {
+            actor.submit(
+                RecorderCommandActor.Command.InputRouteObserved(
+                    sessionId = "recording_current",
+                    chunkIndex = 0,
+                    routeEpoch = 1L,
+                    route = RecordingInputRoute.USB,
+                )
+            )
+        }
+
+        stop.await()
+        route.await()
+        assertEquals(listOf("stop", "route"), order)
+        actor.close()
+        scope.cancel()
+    }
 }

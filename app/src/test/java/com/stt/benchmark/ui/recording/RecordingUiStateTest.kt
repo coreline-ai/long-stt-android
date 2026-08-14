@@ -125,6 +125,22 @@ class RecordingUiStateTest {
         }
     }
 
+    @Test
+    fun routeTransitionMessageRemainsVisibleWhileRecording() {
+        val state = RecordingUiState(
+            availability = RecordingAvailability.READY,
+            runtime = RecordingRuntimeSnapshot(
+                phase = RecordingPhase.RECORDING,
+                message = "입력 장치 변경 후 새 파일에서 녹음을 이어가고 있습니다.",
+            ),
+        )
+
+        assertEquals(
+            "입력 장치 변경 후 새 파일에서 녹음을 이어가고 있습니다.",
+            state.message,
+        )
+    }
+
     private fun chunk(
         index: Int,
         status: RecordingSessionStore.ChunkStatus,

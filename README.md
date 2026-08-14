@@ -31,7 +31,7 @@
   <img src="https://img.shields.io/badge/whisper.cpp-locked-111111?style=flat-square&logo=cplusplus&logoColor=white" alt="whisper.cpp commit 고정" />
 </p>
 <p>
-  <img src="https://img.shields.io/badge/Tests-268_passing-2E7D32?style=flat-square&logo=junit5&logoColor=white" alt="테스트 268개 통과" />
+  <img src="https://img.shields.io/badge/Tests-295_passing-2E7D32?style=flat-square&logo=junit5&logoColor=white" alt="테스트 295개 통과" />
   <img src="https://img.shields.io/badge/Samsung-Android_16_verified-1428A0?style=flat-square&logo=samsung&logoColor=white" alt="Samsung Android 16 검증" />
   <img src="https://img.shields.io/badge/ELF%2FAPK-16KB_ready-C07148?style=flat-square&logo=androidstudio&logoColor=white" alt="16KB page size 준비" />
   <img src="https://img.shields.io/badge/Status-P2_automated_verified-C07148?style=flat-square&logo=androidstudio&logoColor=white" alt="P2 자동 검증 완료" />
@@ -42,7 +42,7 @@
 </div>
 
 > [!NOTE]
-> **2026-08-13 기준선:** Debug APK / Samsung SM-S931N / Android 16. 전사와 녹음은 기기 안에서 처리하며, 외부 요약·전사 채팅·공유·TXT 저장은 사용자가 명시적으로 선택할 때만 앱 경계를 넘습니다.
+> **2026-08-14 기준선:** Debug APK / Samsung SM-S931N / Android 16. 전사와 녹음은 기기 안에서 처리하며, 외부 요약·전사 채팅·공유·TXT 저장은 사용자가 명시적으로 선택할 때만 앱 경계를 넘습니다.
 
 > [!CAUTION]
 > **배포 상태: 임시 차단 (BLOCKED).** 현재 산출물은 내부 개발·검증과 개인 학습용으로만 사용할 수 있으며, 공개 저장소·Maven·앱 스토어·제3자에게 배포할 수 없습니다. Codex 관련 연동의 정식 권리·라이선스·provenance 처리가 완료되고 Coreline의 서면 배포 승인이 있을 때에만 배포 가능 여부를 다시 판단합니다. 빌드·테스트 통과만으로 이 제한이 해제되지는 않습니다.
@@ -52,7 +52,7 @@
 | 영역 | 현재 구현 |
 |---|---|
 | 🎙️ **직접 녹음** | microphone foreground service, 홈·탭 이동 뒤 백그라운드 유지, Android 13+ 알림 권한과 알림 정지 |
-| 🧵 **안전 청크** | 기본 20분 rollover, `.part → final`, `AtomicFile` checkpoint, SHA-256, quarantine·startup reconcile |
+| 🧵 **안전 청크** | 기본 20분 rollover, 입력 장치 변경 시 기존 청크 확정 후 안전 분할, `.part → final`, `AtomicFile` checkpoint, SHA-256, quarantine·startup reconcile |
 | 🎚️ **오디오 fallback** | AAC constrained → AAC default → 48kHz mono PCM WAV 순차 fallback |
 | 📝 **장시간 전사** | `whisper.cpp` 기반 구간별 STT, foreground 진행, 청크 checkpoint, 취소·중단·복구 |
 | 🔗 **녹음 그룹 STT** | READY 무결성 재검사, sequence 보장, 완전·부분 완료 구분, child 순차 실행 |
@@ -233,24 +233,25 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 
 | 검증 항목 | 최신 결과 |
 |---|---|
-| 앱 JVM / Robolectric / Compose | **225 passed / 0 failed / 0 skipped** |
+| 앱 JVM / Robolectric / Compose | **252 passed / 0 failed / 0 skipped** · 완료 알림·TXT·공유 핵심 계약 API 26/34 병행 |
 | OAuth 모듈 | **43 passed / 0 failed / 0 skipped** |
-| Android lint / 산출물 | Debug·Release lint, Debug·Release·deviceTest assemble 통과 |
+| Android lint / 산출물 | Debug·Release lint, Debug·Release·deviceTest assemble, unsigned Release AAB 통과 |
 | Samsung P0 | 데이터 보존 설치, 완료 CTA·알림 딥링크·cold start 복원 통과 |
-| Samsung P1 자동 smoke | 격리 그룹 완료 알림 1건, OAuth Keystore 2건, 보관함 재진입 통과 |
+| Samsung P1 자동 smoke | 격리 deviceTest 8건 통과·실마이크/AICore 5건 opt-in 건너뜀, OAuth Keystore 2건 통과 |
+| 녹음 입력 전환 | 일반 입력 분류만 actor로 직렬화, 일시적 미확정 경로 확인, 변경 시 기존 청크 확정→새 청크 재시작, 200% 글자 안내 자동 검증 |
 | 완료 상세 안정성 | 연속 클릭·가로/세로 회전·닫기·재진입 시 중복 dialog 없음 |
 | 공유 안정성 | 요약/TXT chooser 취소, handler 없음·보안 예외·provider/쓰기 실패 처리 통과 |
 | 장시간 가져오기 | bounded stream copy, `.part → final`, 실패 partial 정리 자동 검증 |
 | 접근성 | font scale 200%·실제 360dp급 세로 폭에서 상태·CTA·공유 버튼 잘림 없음 |
 | P2 전사 채팅 | 정책·원문 없는 AtomicFile·한국어 검색·digest·스트리밍·정밀 탐색·citation·회전 복원 자동 검증 |
 | 근거 확인·복귀 | 채팅 내부 full-screen viewer, 근거 구간 강조, 상·하단 즉시 복귀, draft/message/mode 보존, 잘못된 key 실패 안전 검증 |
-| Samsung P2 합성 smoke | 동의·인덱싱/답변 진행·중지/재시도·200% 오류 GUI·서비스/wake lock 0 확인. 최신 근거 viewer APK 설치·합성 Activity 실행 성공, 잠금 상태 실제 터치는 대기 |
+| Samsung P2 합성 smoke | citation → 강조 viewer → 상단·하단·Android back 복귀, 200% 글자 도달성, 질문·답변·mode 보존, 서비스/wake lock 0 실제 터치 확인 |
 | 장시간 녹음 | 20분 rollover, 1시간·6시간 녹음, 8시간 이상 soak 기준선 통과 |
 | 백그라운드 그룹 STT | 4-child·19-child handoff와 coverage aggregate 통과 |
 | 종료 자원 | 장시간 완료 후 Recorder/STT service와 held wake lock 잔류 없음 |
 | 16KB page size | Debug/Release APK ZIP alignment와 arm64 ELF `0x4000` 검증 |
 
-최신 근거 복귀 개선은 [`dev-plan/implement_20260813_160122.md`](dev-plan/implement_20260813_160122.md), P2 구현·검증은 [`dev-plan/implement_20260813_100053.md`](dev-plan/implement_20260813_100053.md), P1 기준선은 [`dev-plan/implement_20260813_085750.md`](dev-plan/implement_20260813_085750.md)을 확인하세요.
+최신 녹음 입력 전환 구현·검증은 [`dev-plan/implement_20260814_092607.md`](dev-plan/implement_20260814_092607.md), 전체 자동 기준선은 [`dev-plan/implement_20260814_080041.md`](dev-plan/implement_20260814_080041.md), P2 구현·검증은 [`dev-plan/implement_20260813_100053.md`](dev-plan/implement_20260813_100053.md)을 확인하세요.
 
 > [!WARNING]
 > 자동 테스트와 비민감 합성 smoke는 완료했지만, 실제 OAuth 로그인과 외부 LLM 요청은 실행하지 않았습니다. 사용자 승인·실제 하드웨어가 필요한 항목은 아래 표에서 별도 관리합니다.
@@ -263,7 +264,7 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 | P0 | OAuth lifecycle | **사용자 조작 대기.** 실제 로그인, 앱 재실행 복원, 만료/401, 로그아웃, 재로그인 확인 |
 | P0 | Codex 정식 배포 gate | **배포 차단.** Codex 관련 권리·라이선스·코드 provenance의 정식 처리와 Coreline 서면 배포 승인 전에는 공개·스토어·제3자 배포를 진행하지 않음 |
 | P0 | 장시간 단일 파일 import/STT | **승인된 원본 대기.** 새 import, checkpoint 갱신, 프로세스 재생성, 완료 결과 진입과 저장공간 부족 복원성 확인 |
-| P0 | 잠금·오디오 장치·interruption | **하드웨어/사용자 조작 대기.** 실제 화면 잠금, Bluetooth/USB 전환, 전화·알람 중단 정책과 결과 일치 확인 |
+| P0 | 잠금·오디오 장치·interruption | **안전 분할 정책 구현, 실장비 검증 대기.** 실제 화면 잠금, Bluetooth/USB 전환, 전화·알람 중단 정책과 결과 일치 확인 |
 | P1 | 외부 앱 최종 전달 | chooser 취소와 예외 처리는 통과. 사용자 승인 후 비민감 요약·TXT를 실제 외부 앱 한 곳에 전달해 최종 확인 |
 
 대기 항목은 자동 검증 결과로 통과 처리하지 않습니다. 실제 데이터·계정·외부 앱 전송은 사전 사용자 승인 후에만 수행합니다.

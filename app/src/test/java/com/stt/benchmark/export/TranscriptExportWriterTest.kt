@@ -17,7 +17,7 @@ import java.io.IOException
 import java.time.ZoneId
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [26, 34])
 class TranscriptExportWriterTest {
     @Test
     fun utf8ExportPreservesEverySectionWithoutInternalMetadata() {

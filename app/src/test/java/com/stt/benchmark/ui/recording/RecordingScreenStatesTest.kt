@@ -111,6 +111,35 @@ class RecordingScreenStatesTest {
     }
 
     @Test
+    fun routeTransitionNoticeIsReachableAtFontScaleTwo() {
+        val notice = "입력 장치 변경 후 새 파일에서 녹음을 이어가고 있습니다."
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(density = 1f, fontScale = 2f)) {
+                SttBenchmarkTheme(darkTheme = true) {
+                    RecordingScreen(
+                        state = RecordingUiState(
+                            availability = RecordingAvailability.READY,
+                            runtime = RecordingRuntimeSnapshot(
+                                phase = RecordingPhase.RECORDING,
+                                message = notice,
+                            ),
+                        ),
+                        onStart = {},
+                        onStop = {},
+                        onRequestPermission = {},
+                        onOpenAppSettings = {},
+                        onOpenTranscription = {},
+                        reducedMotion = true,
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithText(notice).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("녹음 정지").assertIsDisplayed()
+    }
+
+    @Test
     fun savedRecordingOffersDirectSequentialTranscription() {
         var requested: Pair<String, Boolean>? = null
         setScreen(

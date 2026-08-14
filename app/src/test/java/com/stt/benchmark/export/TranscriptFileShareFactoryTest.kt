@@ -22,7 +22,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [26, 34])
 class TranscriptFileShareFactoryTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private val exportDir get() = File(context.cacheDir, TranscriptFileShareFactory.CACHE_DIRECTORY)
