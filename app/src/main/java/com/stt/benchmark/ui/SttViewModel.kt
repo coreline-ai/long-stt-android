@@ -576,7 +576,13 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                     completedResultTarget = if (clearCompletedTarget) null else it.completedResultTarget,
                 )
             }
-            val ok = isManagedReadableFile(path) && File(path).extension.equals("bin", ignoreCase = true)
+            val verification = withContext(Dispatchers.IO) {
+                val file = File(path)
+                val catalogModel = ModelDownloader.MODELS.firstOrNull { it.fileName == file.name }
+                val readable = isManagedReadableFile(path) && file.extension.equals("bin", ignoreCase = true)
+                readable && (catalogModel == null || catalogModel.isVerified(file))
+            }
+            val ok = verification
             if (ok) {
                 withContext(Dispatchers.IO) { mediaLibraryStore.selectModel(path) }
             }
@@ -585,7 +591,11 @@ class SttViewModel(app: Application) : AndroidViewModel(app) {
                     state = if (ok) SttState.READY else SttState.ERROR,
                     modelLoaded = ok,
                     modelPath = path,
-                    errorMessage = if (!ok) "모델을 불러오지 못했습니다." else ""
+                    errorMessage = if (!ok) {
+                        "모델을 불러오지 못했습니다. 카탈로그 모델은 무결성 검증이 필요합니다."
+                    } else {
+                        ""
+                    }
                 )
             }
             if (ok) loadMediaLibrary()

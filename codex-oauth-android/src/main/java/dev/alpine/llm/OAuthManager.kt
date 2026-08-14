@@ -29,6 +29,7 @@ class OAuthManager(
     private val authorizationMutex = Mutex()
     private val discoveryLock = Any()
     @Volatile private var activeCallback: CompletableDeferred<OAuthCallbackServer.Callback>? = null
+    @Volatile private var activeState: String? = null
     @Volatile private var discoveredEndpoints: OAuthResolvedEndpoints? = null
 
     suspend fun authorize(
@@ -37,15 +38,18 @@ class OAuthManager(
         authorizeOnce(browserContext)
     }
 
-    fun cancelAuthorization(): Boolean =
-        activeCallback?.complete(
+    fun cancelAuthorization(): Boolean {
+        val callback = activeCallback ?: return false
+        val state = activeState ?: return false
+        return callback.complete(
             OAuthCallbackServer.Callback(
                 code = null,
-                state = null,
+                state = state,
                 error = "access_denied",
                 errorDescription = "cancelled by host application",
             ),
-        ) ?: false
+        )
+    }
 
     private suspend fun authorizeOnce(
         browserContext: Context,
@@ -71,12 +75,14 @@ class OAuthManager(
         }
 
         val callbackResult = CompletableDeferred<OAuthCallbackServer.Callback>()
+        activeState = state
         activeCallback = callbackResult
         val callback = OAuthCallbackServer(
             requestedPort = config.callbackPort,
             redirectPath = config.redirectPath,
             fallbackPorts = config.callbackFallbackPorts,
             corsAllowedOrigins = config.callbackCorsAllowedOrigins,
+            expectedState = state,
         ) { result -> callbackResult.complete(result) }
         var callbackRegistered = false
         try {
@@ -116,7 +122,10 @@ class OAuthManager(
             }
             callback.stop()
             store.clearTransaction(config.providerId)
-            if (activeCallback === callbackResult) activeCallback = null
+            if (activeCallback === callbackResult) {
+                activeCallback = null
+                activeState = null
+            }
         }
     }
 

@@ -61,7 +61,7 @@
 | ✨ **선택적 요약** | 사용자 동의 후 구간 요약·통합·저장 진행률 표시, 목록 완료 상태와 요약 공유 |
 | 💬 **전사 근거 채팅** | 완료 전사의 관련 구간만 보내는 빠른 질문, 사용자 선택 전체 정밀 탐색, 스트리밍·중지·재시도, 강조된 근거 확인 후 즉시 대화 복귀 |
 | 🧭 **완료 결과 이동** | 완료 CTA 영구 복원, 정확한 결과 상세 열기, 완료 알림 딥링크, 삭제·손상 target 안전 폴백 |
-| 🔐 **보안 경계** | OAuth token은 Android Keystore 보호, 완료 target은 type/ID만 저장, 전사 원문 자동 전송 금지 |
+| 🔐 **보안 경계** | OAuth token은 Android Keystore 보호·loopback state 선검증, Whisper 모델은 고정 revision/SHA-256 검증, 완료 target은 type/ID만 저장, 전사 원문 자동 전송 금지 |
 | 📊 **벤치마크** | RTF, 처리 시간, 기기 정보, CSV v2 결과와 session identity 기록 |
 
 ## 📱 앱 화면
@@ -172,7 +172,7 @@
 | 도구 | 기준 |
 |---|---|
 | Android Studio / JDK | JDK 17, Android Studio JBR 사용 가능 |
-| Android SDK | compile/target SDK 34, min SDK 26 |
+| Android SDK | compile/target SDK 36, min SDK 26 |
 | Android NDK | `28.2.13676358` |
 | CMake | `3.22.1` |
 | ABI | `arm64-v8a` |
@@ -233,9 +233,10 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 
 | 검증 항목 | 최신 결과 |
 |---|---|
-| 앱 JVM / Robolectric / Compose | **252 passed / 0 failed / 0 skipped** · 완료 알림·TXT·공유 핵심 계약 API 26/34 병행 |
-| OAuth 모듈 | **43 passed / 0 failed / 0 skipped** |
-| Android lint / 산출물 | Debug·Release lint, Debug·Release·deviceTest assemble, unsigned Release AAB 통과 |
+| 앱 JVM / Robolectric / Compose | **255 passed / 0 failed / 0 skipped** · 모델 revision·SHA-256·host 정책과 완료 알림·TXT·공유 핵심 계약 포함 |
+| OAuth 모듈 | **44 passed / 0 failed / 0 skipped** · state 누락/불일치 loopback callback이 정상 로그인을 선점하지 않는 회귀 포함 |
+| Android lint / 산출물 | API 36 Release lint **0 errors / 37 warnings**, Release APK/AAB, 16KB alignment, Release surface gate 통과 |
+| 배포 서명 파이프라인 | keyless gate fail-closed, 일회성 외부 JKS로 signed AAB·`jarsigner`·SHA-256 provenance 종단간 검증 후 key 삭제 |
 | Samsung P0 | 데이터 보존 설치, 완료 CTA·알림 딥링크·cold start 복원 통과 |
 | Samsung P1 자동 smoke | 격리 deviceTest 8건 통과·실마이크/AICore 5건 opt-in 건너뜀, OAuth Keystore 2건 통과 |
 | 녹음 입력 전환 | 일반 입력 분류만 actor로 직렬화, 일시적 미확정 경로 확인, 변경 시 기존 청크 확정→새 청크 재시작, 200% 글자 안내 자동 검증 |
@@ -252,7 +253,7 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 | 16KB page size | Debug/Release APK ZIP alignment와 arm64 ELF `0x4000` 검증 |
 | 사용자·실장비 검증 | **2026-08-14 프로젝트 담당자 완료 확인.** 실제 OAuth lifecycle, 전사 기반 LLM 채팅, 외부 앱 전달, 장시간 import/STT·복구, 잠금·Bluetooth/USB·전화/알람을 포함한 사용자 조작 검증 완료 |
 
-최신 완료 기록은 [`docs/VERIFICATION_COMPLETION_20260814.md`](docs/VERIFICATION_COMPLETION_20260814.md), 녹음 입력 전환 구현·검증은 [`dev-plan/implement_20260814_092607.md`](dev-plan/implement_20260814_092607.md), 전체 자동 기준선은 [`dev-plan/implement_20260814_080041.md`](dev-plan/implement_20260814_080041.md)을 확인하세요.
+최신 배포 전 보안 구현·검증은 [`dev-plan/implement_20260815_080304.md`](dev-plan/implement_20260815_080304.md)와 [`docs/SECURITY_REVIEW_20260815.md`](docs/SECURITY_REVIEW_20260815.md)를, 기존 기능 완료 기록은 [`docs/VERIFICATION_COMPLETION_20260814.md`](docs/VERIFICATION_COMPLETION_20260814.md)를 확인하세요.
 
 > [!NOTE]
 > 2026-08-14에 프로젝트 담당자가 사용자 조작·실장비 검증을 모두 완료한 것으로 확인했습니다. 계정·전사 원문·외부 앱 대상 등 민감한 원시 증적은 저장소에 기록하지 않습니다. 과거 개발 계획의 “대기/미검증” 표기는 당시 실행 시점의 이력이며, 현재 상태는 완료 기록을 기준으로 합니다.
@@ -262,9 +263,9 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 | 우선순위 | 항목 | 현재 상태와 완료 기준 |
 |---|---|---|
 | P0 | Coreline 릴리스 결정 | Coreline이 배포 범위·채널을 결정하고 프로젝트 고유 코드와 제3자 고지의 적용 범위를 확인 |
-| P1 | 서명 산출물·배포 채널 | 실제 릴리스 시 최종 signed APK/AAB와 선택한 배포 채널을 검증 |
+| P1 | 서명 산출물·배포 채널 | `:app:productionReleaseBundle`로 외부 keystore의 signed AAB·서명 검증·SHA-256 provenance를 생성하고 선택한 배포 채널을 검증 |
 
-기능·자동·사용자 조작 테스트는 완료 상태입니다. 위 항목은 선택한 릴리스에 필요한 운영 절차이며, Codex 관련 별도 공식 승인 gate는 아닙니다.
+기능·자동·사용자 조작 테스트는 완료 상태입니다. 위 항목은 선택한 릴리스에 필요한 운영 절차이며, Codex 관련 별도 공식 승인 gate는 아닙니다. keystore를 만들거나 저장하지 않고 CI secret 또는 로컬 환경 변수로만 주입하는 절차는 [`docs/PRODUCTION_SIGNING.md`](docs/PRODUCTION_SIGNING.md)를 확인하세요.
 
 ## 🔒 데이터와 외부 연결 경계
 
@@ -318,6 +319,9 @@ third_party/whisper.cpp.lock          # 고정 upstream commit
 | [`docs/HANDOFF_20260810.md`](docs/HANDOFF_20260810.md) | 프로젝트 구조·보안·운영 handoff |
 | [`docs/BUILD_WHISPER.md`](docs/BUILD_WHISPER.md) | 고정 whisper.cpp source와 native build |
 | [`docs/ANDROID_16KB_PAGE_SIZE.md`](docs/ANDROID_16KB_PAGE_SIZE.md) | Android 16KB page size 대응 |
+| [`docs/PRODUCTION_SIGNING.md`](docs/PRODUCTION_SIGNING.md) | 외부 keystore 기반 signed AAB·provenance 생성 절차 |
+| [`docs/SECURITY_REVIEW_20260815.md`](docs/SECURITY_REVIEW_20260815.md) | 배포 전 보안 검토와 적용 결과 |
+| [`dev-plan/implement_20260815_080304.md`](dev-plan/implement_20260815_080304.md) | API 36·모델 무결성·OAuth state-first·production signing 구현 계획/결과 |
 | [`docs/DEVICE_16KB_TEST_REPORT.md`](docs/DEVICE_16KB_TEST_REPORT.md) | APK/ELF 실측 결과 |
 | [`docs/DEVICE_BASELINE_20260807_1917.md`](docs/DEVICE_BASELINE_20260807_1917.md) | Samsung 설치·장시간 검증 기준선 |
 | [`dev-plan/implement_20260812_141045.md`](dev-plan/implement_20260812_141045.md) | 전체 전사 보기·UTF-8 TXT 저장·파일 공유 |

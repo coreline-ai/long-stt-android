@@ -47,6 +47,17 @@ internal object OAuthCallbackValidator {
         nowMs: Long,
         timeoutMs: Long,
     ): String {
+        val saved = transaction
+            ?: throw OAuthException(
+                "OAuth transaction is no longer available",
+                OAuthFailureKind.TRANSACTION_EXPIRED,
+            )
+        if (nowMs - saved.createdAtMs > timeoutMs) {
+            throw OAuthException("OAuth transaction expired", OAuthFailureKind.TRANSACTION_EXPIRED)
+        }
+        if (callback.state != saved.state) {
+            throw OAuthException("OAuth state mismatch", OAuthFailureKind.STATE_MISMATCH)
+        }
         if (!callback.error.isNullOrBlank()) {
             val description = callback.errorDescription?.takeIf { it.isNotBlank() }
             val suffix = description?.let { ": $it" }.orEmpty()
@@ -62,17 +73,6 @@ internal object OAuthCallbackValidator {
                 "authorization callback did not contain a code",
                 OAuthFailureKind.PROTOCOL,
             )
-        val saved = transaction
-            ?: throw OAuthException(
-                "OAuth transaction is no longer available",
-                OAuthFailureKind.TRANSACTION_EXPIRED,
-            )
-        if (nowMs - saved.createdAtMs > timeoutMs) {
-            throw OAuthException("OAuth transaction expired", OAuthFailureKind.TRANSACTION_EXPIRED)
-        }
-        if (callback.state != saved.state) {
-            throw OAuthException("OAuth state mismatch", OAuthFailureKind.STATE_MISMATCH)
-        }
         return code
     }
 }

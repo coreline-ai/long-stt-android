@@ -52,7 +52,15 @@ class OAuthCoreTest {
 
         assertFailureKind(OAuthFailureKind.USER_DENIED) {
             OAuthCallbackValidator.validate(
-                OAuthCallbackServer.Callback(null, null, "access_denied", "cancelled"),
+                OAuthCallbackServer.Callback(null, "expected", "access_denied", "cancelled"),
+                transaction,
+                1_500L,
+                1_000L,
+            )
+        }
+        assertFailureKind(OAuthFailureKind.STATE_MISMATCH) {
+            OAuthCallbackValidator.validate(
+                OAuthCallbackServer.Callback(null, null, "access_denied", "missing state"),
                 transaction,
                 1_500L,
                 1_000L,
@@ -392,6 +400,42 @@ class OAuthCoreTest {
             assertTrue(callbackPage.contains("Authorization received"))
             assertFalse(callbackPage.contains("Authorization complete"))
             assertTrue(callbackPage.contains("window.close()"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun loopbackCallbackRejectsMismatchedStateBeforeCompletingAuthorization() {
+        var received: OAuthCallbackServer.Callback? = null
+        val latch = CountDownLatch(1)
+        val server = OAuthCallbackServer(
+            requestedPort = 0,
+            redirectPath = "/oauth/callback",
+            expectedState = "expected-state",
+        ) {
+            received = it
+            latch.countDown()
+        }
+        server.start()
+        try {
+            val rejected = callbackRequest(
+                server.boundPort,
+                "GET /oauth/callback?error=access_denied&state=wrong-state HTTP/1.1\r\n" +
+                    "Host: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            )
+            assertTrue(rejected.startsWith("HTTP/1.1 400"))
+            assertFalse(latch.await(150, TimeUnit.MILLISECONDS))
+            assertNull(received)
+
+            val accepted = callbackRequest(
+                server.boundPort,
+                "GET /oauth/callback?code=accepted-code&state=expected-state HTTP/1.1\r\n" +
+                    "Host: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            )
+            assertTrue(accepted.startsWith("HTTP/1.1 200"))
+            assertTrue(latch.await(2, TimeUnit.SECONDS))
+            assertEquals("accepted-code", received?.code)
         } finally {
             server.stop()
         }

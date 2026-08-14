@@ -1,5 +1,6 @@
 import java.security.MessageDigest
 import java.io.ByteArrayOutputStream
+import java.time.Instant
 
 plugins {
     id("com.android.application")
@@ -10,6 +11,28 @@ val assetManifestProvider = providers.gradleProperty("assetManifest")
     .map { rootProject.file(it) }
     .orElse(rootProject.file("config/asset-manifest.tsv"))
 val fontNotice = rootProject.file("config/font-notice.md")
+
+/**
+ * Release secrets are intentionally read only from local Gradle properties or the process
+ * environment. They must never be added to this repository, build output, or diagnostics.
+ */
+fun releaseSigningValue(gradleProperty: String, environmentVariable: String): String? =
+    providers.gradleProperty(gradleProperty)
+        .orElse(providers.environmentVariable(environmentVariable))
+        .orNull
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+val releaseStoreFile = releaseSigningValue("longSttReleaseStoreFile", "LONG_STT_RELEASE_STORE_FILE")
+val releaseStorePassword = releaseSigningValue("longSttReleaseStorePassword", "LONG_STT_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = releaseSigningValue("longSttReleaseKeyAlias", "LONG_STT_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = releaseSigningValue("longSttReleaseKeyPassword", "LONG_STT_RELEASE_KEY_PASSWORD")
+val productionSigningConfigured = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it != null }
 
 val verifyAssetProvenance = tasks.register("verifyAssetProvenance") {
     group = "verification"
@@ -139,6 +162,7 @@ val verify16KbAlignment = tasks.register("verify16KbAlignment") {
     dependsOn("packageDebug", "packageRelease")
     inputs.files(
         file("build/outputs/apk/debug/app-debug.apk"),
+        file("build/outputs/apk/release/app-release.apk"),
         file("build/outputs/apk/release/app-release-unsigned.apk"),
         // Limit task inputs to the two variants that this gate actually reads. A broad
         // merged_native_libs input also captures deviceTest output and makes Gradle require an
@@ -170,10 +194,12 @@ val verify16KbAlignment = tasks.register("verify16KbAlignment") {
             return output.toString(Charsets.UTF_8)
         }
 
-        listOf(
-            file("build/outputs/apk/debug/app-debug.apk"),
+        val releaseApk = listOf(
+            file("build/outputs/apk/release/app-release.apk"),
             file("build/outputs/apk/release/app-release-unsigned.apk"),
-        ).forEach { apk ->
+        ).firstOrNull { it.isFile }
+            ?: error("Release APK is missing. Build packageRelease before verify16KbAlignment.")
+        listOf(file("build/outputs/apk/debug/app-debug.apk"), releaseApk).forEach { apk ->
             check(apk.isFile) { "APK is missing: ${apk.absolutePath}" }
             runTool(zipalign.absolutePath, "-c", "-P", "16", "-v", "4", apk.absolutePath)
         }
@@ -213,7 +239,7 @@ tasks.configureEach {
 
 android {
     namespace = "com.stt.benchmark"
-    compileSdk = 34
+    compileSdk = 36
     // NDK r28+: ELF LOAD 세그먼트 16KB 정렬 기본값
     // (r27 이하는 CMakeLists 의 -Wl,-z,max-page-size=16384 로 보완)
     ndkVersion = "28.2.13676358"
@@ -221,7 +247,7 @@ android {
     defaultConfig {
         applicationId = "com.stt.benchmark"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         // largeHeap 는 AndroidManifest.xml (android:largeHeap="true") 에서 설정
         versionCode = 1
         versionName = "1.0.0"
@@ -252,6 +278,17 @@ android {
         }
     }
 
+    signingConfigs {
+        if (productionSigningConfigured) {
+            create("productionRelease") {
+                storeFile = file(requireNotNull(releaseStoreFile))
+                storePassword = requireNotNull(releaseStorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -259,6 +296,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (productionSigningConfigured) {
+                signingConfig = signingConfigs.getByName("productionRelease")
+            }
         }
         debug {
             isDebuggable = true
@@ -312,6 +352,86 @@ android {
             useLegacyPackaging = false
         }
     }
+}
+
+val verifyProductionSigning = tasks.register("verifyProductionSigning") {
+    group = "verification"
+    description = "Fails closed unless every external production-signing input is configured."
+
+    doLast {
+        check(productionSigningConfigured) {
+            "Production signing configuration is incomplete. See docs/PRODUCTION_SIGNING.md."
+        }
+        check(file(requireNotNull(releaseStoreFile)).isFile) {
+            "Production signing keystore is unavailable. See docs/PRODUCTION_SIGNING.md."
+        }
+        check(android.buildTypes.getByName("release").signingConfig?.name == "productionRelease") {
+            "Release variant is not connected to the production signing configuration."
+        }
+    }
+}
+
+val releaseBundle = layout.buildDirectory.file("outputs/bundle/release/app-release.aab")
+val releaseProvenance = layout.buildDirectory.file("outputs/security/release-provenance.json")
+
+// `bundleRelease` remains available for non-production quality checks. When it is reached
+// through productionReleaseBundle, run the fail-closed secret gate before any bundle work.
+tasks.configureEach {
+    if (name == "bundleRelease") {
+        mustRunAfter(verifyProductionSigning)
+    }
+}
+
+val writeReleaseProvenance = tasks.register("writeReleaseProvenance") {
+    group = "release"
+    description = "Verifies the signed production AAB and writes its non-secret SHA-256 provenance."
+    dependsOn(verifyProductionSigning, "bundleRelease")
+    inputs.file(releaseBundle)
+    outputs.file(releaseProvenance)
+
+    doLast {
+        val bundle = releaseBundle.get().asFile
+        check(bundle.isFile) { "Signed release bundle is missing." }
+        val jarSigner = File(System.getProperty("java.home"), "bin/jarsigner")
+        check(jarSigner.canExecute()) { "JDK jarsigner is required to verify the release bundle." }
+        val verification = providers.exec {
+            commandLine(jarSigner.absolutePath, "-verify", "-certs", bundle.absolutePath)
+        }.result.get()
+        check(verification.exitValue == 0) { "Release AAB signature verification failed." }
+
+        val digest = MessageDigest.getInstance("SHA-256")
+        bundle.inputStream().buffered().use { input ->
+            val buffer = ByteArray(8 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (count > 0) digest.update(buffer, 0, count)
+            }
+        }
+        val sha256 = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        val provenance = releaseProvenance.get().asFile
+        provenance.parentFile.mkdirs()
+        val sourceRevision = System.getenv("GITHUB_SHA")?.takeIf { it.isNotBlank() } ?: "local"
+        provenance.writeText(
+            """
+            {
+              "artifact": "${bundle.name}",
+              "sha256": "$sha256",
+              "versionCode": ${android.defaultConfig.versionCode},
+              "versionName": "${android.defaultConfig.versionName}",
+              "sourceRevision": "$sourceRevision",
+              "createdAtUtc": "${Instant.now()}",
+              "signatureVerified": true
+            }
+            """.trimIndent() + "\n",
+        )
+    }
+}
+
+tasks.register("productionReleaseBundle") {
+    group = "release"
+    description = "Builds, signature-verifies, and records provenance for the production AAB."
+    dependsOn(writeReleaseProvenance)
 }
 
 dependencies {

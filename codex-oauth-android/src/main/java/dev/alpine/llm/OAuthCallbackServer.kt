@@ -5,6 +5,7 @@ import java.net.ServerSocket
 import java.net.URI
 import java.net.URLDecoder
 import java.net.InetAddress
+import java.security.MessageDigest
 import java.nio.charset.StandardCharsets
 
 /** Loopback callback server used by browser-based OAuth providers. */
@@ -18,6 +19,8 @@ class OAuthCallbackServer(
     private val maxHeaderLineBytes: Int = DEFAULT_MAX_HEADER_LINE_BYTES,
     private val maxHeaderBytes: Int = DEFAULT_MAX_HEADER_BYTES,
     private val maxHeaderCount: Int = DEFAULT_MAX_HEADER_COUNT,
+    /** When supplied, an untrusted loopback client cannot complete the flow without this state. */
+    private val expectedState: String? = null,
     private val onCallback: (Callback) -> Unit,
 ) {
     data class Callback(
@@ -40,6 +43,9 @@ class OAuthCallbackServer(
         require(maxHeaderLineBytes > 0) { "maxHeaderLineBytes must be positive" }
         require(maxHeaderBytes > 0) { "maxHeaderBytes must be positive" }
         require(maxHeaderCount > 0) { "maxHeaderCount must be positive" }
+        require(expectedState == null || expectedState.isNotBlank()) {
+            "expectedState must be non-blank when configured"
+        }
     }
 
     fun start() {
@@ -115,19 +121,22 @@ class OAuthCallbackServer(
             .associate {
                 val pair = it.split("=", limit = 2)
                 URLDecoder.decode(pair[0], "UTF-8") to
-                    URLDecoder.decode(pair.getOrElse(1) { "" }, "UTF-8")
+                URLDecoder.decode(pair.getOrElse(1) { "" }, "UTF-8")
             }
-        // Receiving the callback is not the same as completing sign-in: state
-        // validation, token exchange, and encrypted persistence still happen
-        // in OAuthManager after this response is sent.
+        if (!matchesExpectedState(params["state"])) {
+            sendResponse(
+                client = client,
+                status = "400 Bad Request",
+                body = "<html><body><h1>Invalid authorization callback</h1></body></html>",
+            )
+            return
+        }
+        // The loopback boundary validates state before it can complete the
+        // deferred callback. OAuthManager validates it again before exchange.
         val html = "<html><body><h1>Authorization received</h1>" +
             "<p>Returning to the app to finish sign-in.</p>" +
             "<script>window.close()</script></body></html>"
-        val response = "HTTP/1.1 200 OK\r\n" +
-            "Content-Type: text/html; charset=utf-8\r\n" +
-            "Content-Length: ${html.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
-            "Connection: close\r\n\r\n$html"
-        client.getOutputStream().use { it.write(response.toByteArray(StandardCharsets.UTF_8)) }
+        sendResponse(client, "200 OK", html)
         onCallback(
             Callback(
                 code = params["code"],
@@ -136,6 +145,23 @@ class OAuthCallbackServer(
                 errorDescription = params["error_description"],
             ),
         )
+    }
+
+    private fun matchesExpectedState(callbackState: String?): Boolean {
+        val expected = expectedState ?: return true
+        val actual = callbackState ?: return false
+        return MessageDigest.isEqual(
+            expected.toByteArray(StandardCharsets.UTF_8),
+            actual.toByteArray(StandardCharsets.UTF_8),
+        )
+    }
+
+    private fun sendResponse(client: java.net.Socket, status: String, body: String) {
+        val response = "HTTP/1.1 $status\r\n" +
+            "Content-Type: text/html; charset=utf-8\r\n" +
+            "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+            "Connection: close\r\n\r\n$body"
+        client.getOutputStream().use { it.write(response.toByteArray(StandardCharsets.UTF_8)) }
     }
 
     private fun handleCorsPreflight(client: java.net.Socket, origin: String?) {

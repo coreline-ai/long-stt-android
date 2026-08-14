@@ -69,8 +69,8 @@ zipalign -c -P 16 -v 4 app-debug.apk
 
 | 항목 | 값 |
 |------|-----|
-| AGP | **8.5.2** (최소 8.5.1) |
-| Gradle | **8.7** |
+| AGP | **8.10.1** (API 36·16KB ZIP alignment 지원) |
+| Gradle | **8.11.1** |
 | NDK | **28.2.x** (ELF 16KB 기본; r27도 링커 플래그로 가능) |
 | packaging | `jniLibs.useLegacyPackaging = false` |
 
@@ -164,8 +164,8 @@ $READELF -l libwhisper.so | grep RELRO   # GNU_RELRO 확인
 
 | 파일 | 변경 |
 |------|------|
-| `build.gradle.kts` | AGP **8.2.2 → 8.5.2** |
-| `gradle-wrapper.properties` | Gradle **8.5 → 8.7** |
+| `build.gradle.kts` | AGP **8.2.2 → 8.10.1** |
+| `gradle-wrapper.properties` | Gradle **8.5 → 8.11.1** |
 | `app/build.gradle.kts` | NDK **28.2.13676358**, packaging 주석 정리 |
 | `CMakeLists.txt` | 16KB 링커 플래그 유지 (r27 백업 호환) |
 

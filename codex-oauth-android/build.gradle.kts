@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "dev.alpine.llm"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 26
@@ -23,7 +23,7 @@ android {
     }
 
     testOptions {
-        targetSdk = 34
+        targetSdk = 36
         unitTests.isIncludeAndroidResources = true
     }
 }

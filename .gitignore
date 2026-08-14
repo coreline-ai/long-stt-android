@@ -9,6 +9,14 @@ build/
 .externalNativeBuild
 .cxx
 
+# Production signing material and local secret configuration (never commit)
+*.jks
+*.keystore
+*.p12
+*.pfx
+/release-signing.properties
+/signing/
+
 # 네이티브 라이브러리 (용량 큼, 빌드 산출물)
 app/libs/*.aar
 app/src/main/jniLibs/**/*.so
