@@ -13,13 +13,15 @@
 | ABI | `arm64-v8a` |
 | NDK | `28.2.13676358` |
 | CMake | `3.22.1` |
+| Android SDK | compile/target 36, min 26 |
+| AGP / Gradle | `8.10.1` / `8.11.1` |
 
-이 commit은 fresh-clone 빌드 기준 후보이며, 기존 Samsung 설치 APK와 바이너리 동일성이 증명된 commit은 아니다. Samsung 설치 전 checkpoint 백업과 실기기 자격 검증을 수행한다.
+이 commit은 현재 fresh-clone·Release·16KB 검증의 고정 빌드 기준선이다. 2026-08-07 이전 `/tmp/whisper.cpp` 기반 APK와는 바이너리 hash가 다르므로 그 과거 APK와 동일한 artifact라고 주장하지 않는다. 현재 기능·사용자/실장비 검증 상태는 [`VERIFICATION_COMPLETION_20260814.md`](VERIFICATION_COMPLETION_20260814.md)를 따른다.
 
 ## 사전 요구사항
 
 - JDK 17. Android Studio JBR 사용 가능
-- Android SDK 34
+- Android SDK 36
 - Android NDK `28.2.13676358`
 - CMake `3.22.1`
 - Git
@@ -52,21 +54,24 @@ cd long-stt-android
 
 ```bash
 ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest
-./gradlew :app:assembleRelease
+./gradlew :app:assembleRelease :app:bundleRelease :app:verify16KbAlignment
 ```
 
 산출물:
 
 - Debug: `app/build/outputs/apk/debug/app-debug.apk`
 - Android test: `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`
-- Release unsigned: `app/build/outputs/apk/release/app-release-unsigned.apk`
+- Release unsigned APK: `app/build/outputs/apk/release/app-release-unsigned.apk`
+- Release unsigned AAB: `app/build/outputs/bundle/release/app-release.aab`
+
+위 Release 파일은 자동 품질 검증용 unsigned 산출물이다. 실제 배포용 signed AAB는 외부 keystore를 주입한 뒤 `./gradlew :app:productionReleaseBundle`로 만들며, 자세한 절차는 [`PRODUCTION_SIGNING.md`](PRODUCTION_SIGNING.md)를 따른다.
 
 JNI의 `WhisperLib.getSystemInfo()`는 upstream version과 고정 commit을 포함한다. 런타임 보고서에서 실제 빌드 provenance를 확인할 때 사용한다.
 
 ## 16KB 페이지 검증
 
 ```bash
-ZIPALIGN="$ANDROID_HOME/build-tools/35.0.0/zipalign"
+ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
 "$ZIPALIGN" -c -P 16 -v 4 app/build/outputs/apk/debug/app-debug.apk
 "$ZIPALIGN" -c -P 16 -v 4 app/build/outputs/apk/release/app-release-unsigned.apk
 ```
@@ -77,14 +82,16 @@ ELF 검증은 `llvm-readelf -l`의 모든 LOAD alignment가 `0x4000` 이상인�
 
 whisper.cpp source와 모델 artifact는 별도다. 앱은 모델을 `files/models/`에 다운로드하며 모델 파일은 Git에 포함하지 않는다.
 
-```bash
-# 로컬 테스트 예시
-curl -L \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin \
-  -o /tmp/ggml-base-q5_1.bin
-```
+제품 앱은 mutable `main` URL을 사용하지 않는다. `ModelDownloader`가 revision `5359861c739e955e79d9a303bcbc70fb988958b1`에 고정된 URL, 정확한 byte size와 SHA-256, HTTPS 허용 host, 제한된 manual redirect를 확인한 뒤에만 `.part` 파일을 완료 모델로 승격한다.
 
-제품 다운로드 경로에는 모델별 SHA-256과 저장 공간 사전 검사를 별도로 적용해야 한다.
+예를 들어 `ggml-base-q5_1.bin` 정본은 다음과 같다.
+
+| 항목 | 값 |
+|---|---|
+| byte size | `59,707,625` |
+| SHA-256 | `422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898` |
+
+수동 다운로드 파일은 위 값을 독립 검증하지 않으면 제품 catalog 모델로 간주하지 않는다.
 
 ## commit 변경 절차
 
@@ -108,7 +115,7 @@ local patch가 필요하면 patch 파일과 적용 이유를 저장소에 포함
 | Java home 오류 | 존재하지 않는 `JAVA_HOME` | Android Studio JBR 또는 JDK 17 설정 |
 | SDK 위치 오류 | `ANDROID_HOME`/`local.properties` 없음 | Android SDK 경로 설정 |
 | `UnsatisfiedLinkError` | native build/packaging 실패 | APK의 `lib/arm64-v8a`와 CMake 로그 확인 |
-| 16KB 실패 | linker/packaging 정렬 누락 | NDK r28, AGP 8.5.2, CMake linker flag 확인 |
+| 16KB 실패 | linker/packaging 정렬 누락 | NDK r28, AGP 8.10.1, Gradle 8.11.1, CMake linker flag 확인 |
 
 ## Provenance 주의
 

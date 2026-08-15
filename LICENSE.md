@@ -47,9 +47,11 @@ distribution-approval requirement.
 
 This license does not grant rights in third-party components. You must comply
 with the applicable third-party notices and licenses, including the upstream
-MIT license for `whisper.cpp`. The `codex-oauth-android` fixed upstream
-requires separate provenance and distribution approval before any public,
-store, or third-party distribution.
+MIT license for `whisper.cpp`. The `codex-oauth-android` fixed upstream is
+tracked through `codex-oauth-android/UPSTREAM.md`; a release must verify the
+applicable third-party notices, licenses, and service terms. The integration
+does not by itself create a separate “Codex official distribution approval”
+requirement.
 
 ## 6. No trademark license
 

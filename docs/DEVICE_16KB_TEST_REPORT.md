@@ -1,8 +1,11 @@
 # 실기기 16KB 호환 테스트 리포트
 
-일시: 2026-08-06  
-기기: **Samsung SM-S931N** (Galaxy S25 계열), serial `R3CY40PXCAP`  
-빌드: AGP 8.5.2 + NDK 28.2.13676358 + 16KB ELF/ZIP 정렬 APK
+> [!NOTE]
+> 이 문서는 2026-08-06 AGP 8.5.2 빌드의 실측 증거를 보존한다. 현재 빌드 기준은 AGP 8.10.1 / Gradle 8.11.1이며 [`ANDROID_16KB_PAGE_SIZE.md`](ANDROID_16KB_PAGE_SIZE.md)를 따른다.
+
+- 일시: 2026-08-06
+- 기기: **Samsung SM-S931N** (Galaxy S25 계열), serial `R3CY40PXCAP`
+- 빌드: AGP 8.5.2 + NDK 28.2.13676358 + 16KB ELF/ZIP 정렬 APK
 
 ---
 
@@ -26,7 +29,8 @@ SecSettings 문자열 및 AOSP 가이드 기준, 이 기기에서 16KB 모드 ON
 2. **전체 사용자 데이터 삭제** (wipe)
 3. `/data` 를 **F2FS → EXT4** 로 재포맷
 
-adb 로 강제 전환 불가(잠금 + wipe 대화상자).  
+adb 로 강제 전환 불가(잠금 + wipe 대화상자).
+
 **데이터 손실 위험** 때문에 이번 세션에서는 16KB 커널 재부팅을 실행하지 않음.
 
 ---
@@ -84,10 +88,10 @@ CSV: `stt_post_reboot_smoke.csv`
 
 > ⚠️ **모든 데이터 삭제 + 부트로더 잠금 해제**. 업무 폰이면 비권장.
 
-1. 설정 → 개발자 옵션 → **OEM 잠금 해제** ON  
-2. 부트로더 unlock 절차 수행 (삼성 계정/녹스 워런티 영향 가능)  
-3. 개발자 옵션 → **16KB 페이지 크기로 부팅** ON  
-4. 안내 대화상자에서 데이터 삭제 확인 → 재부팅  
+1. 설정 → 개발자 옵션 → **OEM 잠금 해제** ON
+2. 부트로더 unlock 절차 수행 (삼성 계정/녹스 워런티 영향 가능)
+3. 개발자 옵션 → **16KB 페이지 크기로 부팅** ON
+4. 안내 대화상자에서 데이터 삭제 확인 → 재부팅
 5. 부팅 후:
 
 ```bash
@@ -98,7 +102,7 @@ adb -s R3CY40PXCAP shell getconf PAGE_SIZE   # 16384 이어야 함
 
 대안:
 
-- Android Studio **16KB Page Size** 시스템 이미지 에뮬레이터  
+- Android Studio **16KB Page Size** 시스템 이미지 에뮬레이터
 - [Samsung Remote Test Lab 16KB devices](https://developer.samsung.com/remotetestlab/devices/129/16kb-page-size)
 
 ---
@@ -107,9 +111,10 @@ adb -s R3CY40PXCAP shell getconf PAGE_SIZE   # 16384 이어야 함
 
 현재 **16KB 정렬 APK** 는 삼성 SM-S931N 실기기에서:
 
-- 설치 가능  
-- 재부팅 후에도 네이티브 라이브러리 정상 로드  
-- whisper STT 정상 동작  
+- 설치 가능
+- 재부팅 후에도 네이티브 라이브러리 정상 로드
+- whisper STT 정상 동작
 
-까지 확인됨.  
+까지 확인됨.
+
 **16KB 페이지 커널 위에서의 런타임 검증**만 OEM unlock/초기화 없이는 진행 불가.

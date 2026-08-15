@@ -1,5 +1,8 @@
 # voice-tracker-find GUI·녹음 기능 이식 정밀 검토
 
+> [!NOTE]
+> 이 문서는 구현 전 검토 기록이다. 선별 이식과 후속 검증은 완료됐으며 현재 상태는 [`HANDOFF_20260815.md`](HANDOFF_20260815.md)를 우선한다.
+
 - 작성 일시: 2026-08-07 20:26 KST
 - 대상 프로젝트: `coreline-ai/long-stt-android`
 - 참조 프로젝트: `coreline-ai/voice-tracker-find`

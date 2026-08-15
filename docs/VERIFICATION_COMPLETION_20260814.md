@@ -1,7 +1,9 @@
 # Long STT Android 검증 완료 현황
 
-기준일: `2026-08-14 KST`  
-상태: **기능·자동·사용자/실장비 검증 완료 / Coreline 릴리스 결정 가능**
+- 사용자·실장비 완료 확인일: `2026-08-14 KST`
+- 최신 소스 자동 검증 반영일: `2026-08-15 KST`
+
+상태: **기능·보안 소스·자동·사용자/실장비 검증 완료 / Coreline 릴리스 결정 가능**
 
 ## 완료 기준
 
@@ -9,7 +11,12 @@
 
 | 검증 범위 | 현재 상태 |
 |---|---|
-| 앱·OAuth 자동 테스트, lint, Debug/Release/deviceTest 산출물, 16KB 검증 | 완료 |
+| 앱 JVM 255건·OAuth JVM 44건, 실패/오류/skip 0 | 완료 |
+| API 36 Release lint 0 errors / 37 warnings | 완료 |
+| Debug/Release/deviceTest 산출물, Release surface, 16KB 검증 | 완료 |
+| 모델 고정 revision·크기·SHA-256·허용 host 검증 | 완료 |
+| OAuth loopback state-first 검증 | 완료 |
+| production signing fail-closed·일회성 외부 JKS signed AAB/provenance | 완료 |
 | 실제 OAuth lifecycle | 완료 확인 |
 | 실제 전사 기반 LLM 채팅·근거 확인·복귀 | 완료 확인 |
 | 실제 외부 앱 요약/TXT 전달 | 완료 확인 |
@@ -24,10 +31,13 @@
 
 ## 남은 절차
 
-테스트 항목은 남아 있지 않다. 실제 릴리스 시 다음 운영 절차를 수행한다.
+소스 구현과 테스트 항목은 남아 있지 않다. 실제 릴리스 시 다음 운영 절차를 수행한다.
 
 1. Coreline이 릴리스 범위·배포 채널을 결정
 2. 프로젝트 고유 코드와 제3자 구성요소의 고지·라이선스 적용 범위를 확인
-3. 최종 signed APK/AAB와 배포 채널 검증
+3. 보호된 upload key로 `:app:productionReleaseBundle` 실행
+4. signed AAB·서명·SHA-256 provenance와 배포 채널 검증
+
+구체적인 secret 주입·CI·artifact 절차는 [`PRODUCTION_SIGNING.md`](PRODUCTION_SIGNING.md)를 따른다. 일반 `bundleRelease`가 만드는 unsigned AAB는 배포본이 아니다.
 
 Codex 관련 연동만으로 별도의 “Codex 정식 배포 승인”이 필요한 것은 아니다. 다만 적용되는 서비스 약관과 제3자 구성요소의 조건은 각 릴리스에 맞게 준수한다.

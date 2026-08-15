@@ -1,7 +1,7 @@
 # Android 16KB Page Size 호환 가이드
 
-기준: [Support 16 KB page sizes](https://developer.android.com/guide/practices/page-sizes) (2026-08 문서)  
-대상 프로젝트: `AndroidSttBenchmark` (whisper.cpp 네이티브 포함)
+- 기준: [Support 16 KB page sizes](https://developer.android.com/guide/practices/page-sizes) (2026-08 문서)
+- 대상 프로젝트: `AndroidSttBenchmark` (whisper.cpp 네이티브 포함)
 
 ---
 
@@ -90,8 +90,8 @@ packaging {
 }
 ```
 
-단점: 설치 시 디스크에 추출 → 용량↑, 설치 실패 확률↑  
-Google 권장: 가능하면 A 경로.
+- 단점: 설치 시 디스크에 추출 → 용량↑, 설치 실패 확률↑
+- Google 권장: 가능하면 A 경로.
 
 ### ✅ 권장 C — CMake 링커 플래그 (NDK ≤ r27)
 
@@ -123,7 +123,7 @@ target_link_options(whisper PRIVATE
 ### 4.1 ELF
 
 ```bash
-NDK=~/.local/android-sdk/ndk/28.2.13676358
+NDK="$ANDROID_HOME/ndk/28.2.13676358"
 READELF=$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-readelf
 SO=app/build/intermediates/merged_native_libs/debug/out/lib/arm64-v8a
 
@@ -137,7 +137,7 @@ done
 ### 4.2 ZIP (APK)
 
 ```bash
-ZIPALIGN=~/.local/android-sdk/build-tools/36.0.0/zipalign
+ZIPALIGN="$ANDROID_HOME/build-tools/36.0.0/zipalign"
 $ZIPALIGN -c -P 16 -v 4 app/build/outputs/apk/debug/app-debug.apk
 # 마지막 줄: Verification successful
 ```
@@ -176,7 +176,7 @@ $READELF -l libwhisper.so | grep RELRO   # GNU_RELRO 확인
 zipalign -c -P 16 -v 4 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### 검증 결과 (2026-08-06 적용 후)
+### 검증 결과
 
 ```
 zipalign -c -P 16 -v 4 app-debug.apk
@@ -186,6 +186,15 @@ zipalign -c -P 16 -v 4 app-debug.apk
 ELF LOAD Align (APK 추출 후 llvm-readelf):
 → 전 라이브러리 Align=0x4000 (16KB)
 ```
+
+2026-08-15 API 36 / AGP 8.10.1 기준으로 아래 자동 gate를 다시 통과했다.
+
+```bash
+./gradlew :app:verify16KbAlignment
+```
+
+- Debug·Release APK ZIP alignment 통과
+- Debug·Release arm64 ELF LOAD alignment `0x4000` 이상 통과
 
 ---
 

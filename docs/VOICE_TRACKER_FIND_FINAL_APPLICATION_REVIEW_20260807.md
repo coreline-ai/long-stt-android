@@ -1,5 +1,8 @@
 # voice-tracker-find 디자인·참조 소스 최종 적용 검토
 
+> [!NOTE]
+> 이 문서는 2026-08-07 적용 전 최종 검토 기록이다. 현재 GUI·녹음·전사·보안 구현 상태는 [`HANDOFF_20260815.md`](HANDOFF_20260815.md)를 우선한다.
+
 - 작성 일시: 2026-08-07 KST
 - 현재 프로젝트: `coreline-ai/long-stt-android`
 - 참조 프로젝트: `coreline-ai/voice-tracker-find`

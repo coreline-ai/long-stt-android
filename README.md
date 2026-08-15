@@ -31,10 +31,10 @@
   <img src="https://img.shields.io/badge/whisper.cpp-locked-111111?style=flat-square&logo=cplusplus&logoColor=white" alt="whisper.cpp commit 고정" />
 </p>
 <p>
-  <img src="https://img.shields.io/badge/Tests-295_passing-2E7D32?style=flat-square&logo=junit5&logoColor=white" alt="테스트 295개 통과" />
+  <img src="https://img.shields.io/badge/Tests-299_passing-2E7D32?style=flat-square&logo=junit5&logoColor=white" alt="테스트 299개 통과" />
   <img src="https://img.shields.io/badge/Samsung-Android_16_verified-1428A0?style=flat-square&logo=samsung&logoColor=white" alt="Samsung Android 16 검증" />
   <img src="https://img.shields.io/badge/ELF%2FAPK-16KB_ready-C07148?style=flat-square&logo=androidstudio&logoColor=white" alt="16KB page size 준비" />
-  <img src="https://img.shields.io/badge/Status-P2_automated_verified-C07148?style=flat-square&logo=androidstudio&logoColor=white" alt="P2 자동 검증 완료" />
+  <img src="https://img.shields.io/badge/Release_source-verified-C07148?style=flat-square&logo=androidstudio&logoColor=white" alt="릴리스 소스 검증 완료" />
 </p>
 
 [핵심 기능](#-핵심-기능) · [앱 화면](#-앱-화면) · [동작 구조](#-동작-구조) · [빌드](#-빌드와-실행) · [검증](#-검증-상태)
@@ -42,7 +42,7 @@
 </div>
 
 > [!NOTE]
-> **2026-08-14 기준선:** Debug APK / Samsung SM-S931N / Android 16. 전사와 녹음은 기기 안에서 처리하며, 외부 요약·전사 채팅·공유·TXT 저장은 사용자가 명시적으로 선택할 때만 앱 경계를 넘습니다.
+> **2026-08-15 소스 기준선:** API 36, 모델 무결성, OAuth state-first, production signing pipeline까지 자동 검증했습니다. Samsung SM-S931N / Android 16 사용자·실장비 검증 기준일은 2026-08-14입니다. 전사와 녹음은 기기 안에서 처리하며, 외부 요약·전사 채팅·공유·TXT 저장은 사용자가 명시적으로 선택할 때만 앱 경계를 넘습니다.
 
 > [!NOTE]
 > **배포 정책:** Coreline은 권리 보유자로서 자체 릴리스의 배포 여부를 결정할 수 있습니다. Codex 관련 연동만으로 별도의 “Codex 정식 배포 승인”이 필요한 것은 아닙니다. 다만 배포 시에는 제3자 구성요소의 고지·라이선스와 사용하는 서비스의 적용 약관을 준수해야 합니다. 이 저장소의 개인 학습용 라이선스는 제3자에게 재배포 권한을 부여하지 않습니다.
@@ -203,7 +203,7 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 ### 3. 전체 품질 게이트
 
 ```bash
-# 앱·OAuth 테스트, Android lint, 설치 가능한 Debug APK 확인
+# 앱·OAuth 테스트, Android lint, Debug/Release 산출물과 보안 gate 확인
 ./gradlew \
   :app:testDebugUnitTest \
   :codex-oauth-android:testDebugUnitTest \
@@ -213,6 +213,7 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
   :app:assembleRelease \
   :app:assembleDeviceTest \
   :app:assembleDeviceTestAndroidTest \
+  :app:bundleRelease \
   :app:verify16KbAlignment \
   :app:verifyReleaseSurface
 ```
@@ -253,17 +254,18 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 | 16KB page size | Debug/Release APK ZIP alignment와 arm64 ELF `0x4000` 검증 |
 | 사용자·실장비 검증 | **2026-08-14 프로젝트 담당자 완료 확인.** 실제 OAuth lifecycle, 전사 기반 LLM 채팅, 외부 앱 전달, 장시간 import/STT·복구, 잠금·Bluetooth/USB·전화/알람을 포함한 사용자 조작 검증 완료 |
 
-최신 배포 전 보안 구현·검증은 [`dev-plan/implement_20260815_080304.md`](dev-plan/implement_20260815_080304.md)와 [`docs/SECURITY_REVIEW_20260815.md`](docs/SECURITY_REVIEW_20260815.md)를, 기존 기능 완료 기록은 [`docs/VERIFICATION_COMPLETION_20260814.md`](docs/VERIFICATION_COMPLETION_20260814.md)를 확인하세요.
+최신 상태는 [`docs/HANDOFF_20260815.md`](docs/HANDOFF_20260815.md)를 우선 확인하세요. 배포 전 보안 구현·검증은 [`dev-plan/implement_20260815_080304.md`](dev-plan/implement_20260815_080304.md)와 [`docs/SECURITY_REVIEW_20260815.md`](docs/SECURITY_REVIEW_20260815.md), 사용자·실장비 완료 기록은 [`docs/VERIFICATION_COMPLETION_20260814.md`](docs/VERIFICATION_COMPLETION_20260814.md)에 있습니다.
 
 > [!NOTE]
 > 2026-08-14에 프로젝트 담당자가 사용자 조작·실장비 검증을 모두 완료한 것으로 확인했습니다. 계정·전사 원문·외부 앱 대상 등 민감한 원시 증적은 저장소에 기록하지 않습니다. 과거 개발 계획의 “대기/미검증” 표기는 당시 실행 시점의 이력이며, 현재 상태는 완료 기록을 기준으로 합니다.
 
 ## 🚦 릴리스 준비 기준
 
-| 우선순위 | 항목 | 현재 상태와 완료 기준 |
+| 구분 | 현재 상태 | 실제 릴리스 시 절차 |
 |---|---|---|
-| P0 | Coreline 릴리스 결정 | Coreline이 배포 범위·채널을 결정하고 프로젝트 고유 코드와 제3자 고지의 적용 범위를 확인 |
-| P1 | 서명 산출물·배포 채널 | `:app:productionReleaseBundle`로 외부 keystore의 signed AAB·서명 검증·SHA-256 provenance를 생성하고 선택한 배포 채널을 검증 |
+| 기능·보안 소스 | **완료** | 코드 변경 시 영향 범위 회귀 검증 |
+| 서명 파이프라인 | **구현·종단간 검증 완료** | Coreline upload key를 보호 환경에서 주입해 `:app:productionReleaseBundle` 실행 |
+| 배포 운영 | 릴리스별 결정 | 배포 채널·버전·고지·약관·단계적 rollout 확인 |
 
 기능·자동·사용자 조작 테스트는 완료 상태입니다. 위 항목은 선택한 릴리스에 필요한 운영 절차이며, Codex 관련 별도 공식 승인 gate는 아닙니다. keystore를 만들거나 저장하지 않고 CI secret 또는 로컬 환경 변수로만 주입하는 절차는 [`docs/PRODUCTION_SIGNING.md`](docs/PRODUCTION_SIGNING.md)를 확인하세요.
 
@@ -316,7 +318,8 @@ third_party/whisper.cpp.lock          # 고정 upstream commit
 
 | 문서 | 내용 |
 |---|---|
-| [`docs/HANDOFF_20260810.md`](docs/HANDOFF_20260810.md) | 프로젝트 구조·보안·운영 handoff |
+| [`docs/README.md`](docs/README.md) | 현재 문서·역사 문서 구분과 읽기 순서 |
+| [`docs/HANDOFF_20260815.md`](docs/HANDOFF_20260815.md) | 최신 프로젝트 구조·보안·운영 handoff |
 | [`docs/BUILD_WHISPER.md`](docs/BUILD_WHISPER.md) | 고정 whisper.cpp source와 native build |
 | [`docs/ANDROID_16KB_PAGE_SIZE.md`](docs/ANDROID_16KB_PAGE_SIZE.md) | Android 16KB page size 대응 |
 | [`docs/PRODUCTION_SIGNING.md`](docs/PRODUCTION_SIGNING.md) | 외부 keystore 기반 signed AAB·provenance 생성 절차 |

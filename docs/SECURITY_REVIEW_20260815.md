@@ -4,6 +4,8 @@
 - **방법:** Android manifest·Kotlin/JNI·OAuth·파일/네트워크 경로·빌드 설정·의존성 메타데이터 검토, `lintRelease` 실행
 - **제외:** 악성 앱을 설치한 실기기 침투 시험, 루팅/잠금 해제 기기, 실제 OAuth 계정·네트워크 패킷, 서버/외부 제공자 인프라 및 법률·약관 검토
 
+현재 전체 완료 상태와 릴리스 운영 기준은 [`HANDOFF_20260815.md`](HANDOFF_20260815.md)를 우선한다. 이 보고서의 SEC-004/005/007/008/009는 선택적 방어 심화·제품 정책 후보이며 현재 합의된 배포 필수 4개 항목에는 포함되지 않는다.
+
 ## 요약
 
 현재 소스는 앱 내부 저장소 사용, 백업/기기 이전 제외, 제한된 `FileProvider`, 비공개 서비스, Debug 로그 경계, Android Keystore 기반 OAuth 토큰 암호화, PKCE/state 검증 등 **좋은 기본 방어선**을 갖추고 있다. 저장소에서 알려진 API 키·개인 키 패턴도 발견되지 않았다.
@@ -225,8 +227,8 @@ Android는 exported component가 다른 앱에 의해 실행될 수 있으므로
 1. **완료:** API 36 전환 및 Release build 회귀 검증.
 2. **완료:** model SHA-256/revision/host 검증과 signed AAB 배포 파이프라인 구현.
 3. **완료:** OAuth callback state-first 변경과 hostile loopback callback 회귀 테스트 추가.
-4. **후속 P2:** import 크기/여유공간 상한, 데이터 보관·실제 삭제 정책을 구현/문서화.
-5. **후속 P2/P3:** SCA·SBOM·dependency verification, R8 후보 검증, 선택적 화면 보호.
+4. **선택적 P2:** threat model이 확대되면 import 크기/여유공간 상한, 데이터 보관·실제 삭제 정책을 재평가.
+5. **선택적 P2/P3:** 조직 보안 정책에 따라 SCA·SBOM·dependency verification, R8, 화면 보호를 재평가.
 
 ## 검증 결과
 
@@ -241,4 +243,4 @@ Android는 exported component가 다른 앱에 의해 실행될 수 있으므로
 | production signing | secret 미주입 gate fail-closed, 일회성 외부 JKS로 signed AAB·`jarsigner`·provenance 종단간 통과 후 key 삭제 |
 | 실제 OAuth 계정 공격·네트워크 MITM·루팅 기기 침투 시험 | 이번 범위에서는 미실행 |
 
-이 보고서는 코드 정적 검토와 위 자동 검증 결과다. 실제 Coreline upload key/Play Console을 쓰는 릴리스와 별도 악성 앱 동반 실기기 시험은 보호된 운영 환경에서 수행해야 한다.
+이 보고서는 코드 정적 검토와 위 자동 검증 결과다. 합의된 배포 전 필수 구현 4개는 완료됐다. 실제 Coreline upload key/Play Console을 쓰는 릴리스는 보호된 운영 환경에서 수행하며, 별도 악성 앱 동반 침투 시험은 threat model 확대 시 선택적으로 진행한다.
