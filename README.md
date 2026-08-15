@@ -66,7 +66,7 @@
 
 ## 📱 앱 화면
 
-아래 **6장만** 최신 코드의 데이터 격리용 `deviceTest` 앱을 Samsung SM-S931N / Android 16에서 직접 캡처했습니다. 실제 전사·요약 본문, 파일 경로, 계정 식별 정보는 포함하지 않습니다.
+아래 **8장**은 최신 코드의 데이터 격리용 `deviceTest` 앱을 Samsung SM-S931N / Android 16에서 직접 캡처했습니다. 채팅 2장은 네트워크·OAuth·실제 저장소를 연결하지 않는 고정 합성 상태이며, 실제 전사·요약 본문, 파일 경로, 계정 식별 정보는 포함하지 않습니다.
 
 ### 첫 실행 소개
 
@@ -103,6 +103,23 @@
       <img src="docs/screenshots/05-library-empty.png" width="260" alt="빈 보관함 최신 화면" /><br />
       <b>통합 보관함</b><br />
       데이터 없는 초기 상태
+    </td>
+  </tr>
+</table>
+
+### 전사 근거 채팅
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/07-chat-completed.png" width="300" alt="전사 기반 질문과 검증된 근거 최신 화면" /><br />
+      <b>빠른 질문과 검증된 근거</b><br />
+      합성 답변과 허용된 시간 근거만 표시
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/08-chat-citation-viewer.png" width="300" alt="전사 근거 구간 확인 최신 화면" /><br />
+      <b>근거 확인과 대화 복귀</b><br />
+      참조 구간을 강조하고 기존 대화로 즉시 복귀
     </td>
   </tr>
 </table>
