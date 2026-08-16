@@ -3,12 +3,19 @@ package com.stt.benchmark
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import com.stt.benchmark.chat.TranscriptChatMode
@@ -20,6 +27,9 @@ import com.stt.benchmark.data.TranscriptSourceRef
 import com.stt.benchmark.data.TranscriptSourceDocument
 import com.stt.benchmark.data.TranscriptSourceSection
 import com.stt.benchmark.data.TranscriptSourceType
+import com.stt.benchmark.ui.AppDestination
+import com.stt.benchmark.ui.ArchiveBottomBar
+import com.stt.benchmark.ui.SystemBarAppearance
 import com.stt.benchmark.ui.chat.TranscriptChatScreen
 import com.stt.benchmark.ui.theme.SttBenchmarkTheme
 
@@ -30,6 +40,7 @@ import com.stt.benchmark.ui.theme.SttBenchmarkTheme
 class DebugTranscriptChatAuditActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         val initialScenario = intent.getStringExtra(EXTRA_SCENARIO).orEmpty().uppercase().ifBlank { SCENARIO_EMPTY }
         val forceLargeText = intent.getBooleanExtra(EXTRA_LARGE_TEXT, false)
         setContent {
@@ -40,23 +51,42 @@ class DebugTranscriptChatAuditActivity : ComponentActivity() {
             val state = syntheticState(scenario, mode, draft)
             val content: @Composable () -> Unit = {
                 SttBenchmarkTheme {
-                    TranscriptChatScreen(
-                        state = state,
-                        onBack = { finish() },
-                        onConfirmConsent = { scenario = SCENARIO_INDEXING },
-                        onDismissConsent = { finish() },
-                        onModeChange = { mode = it },
-                        onDraftChange = { draft = it },
-                        onSend = { scenario = SCENARIO_ANSWERING },
-                        onStop = { scenario = SCENARIO_CANCELLED },
-                        onRetry = { scenario = SCENARIO_COMPLETED },
-                        onNewConversation = {
-                            scenario = SCENARIO_EMPTY
-                            draft = SYNTHETIC_QUESTION
-                        },
-                        onDeleteConversation = { scenario = SCENARIO_EMPTY },
-                        document = syntheticDocument(),
-                    )
+                    SystemBarAppearance(darkBackground = true)
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background,
+                    ) {
+                        Scaffold(
+                            containerColor = MaterialTheme.colorScheme.background,
+                            bottomBar = {
+                                ArchiveBottomBar(
+                                    selectedDestination = AppDestination.LIBRARY,
+                                    recordingActive = false,
+                                    showLabels = true,
+                                    onNavigate = {},
+                                )
+                            },
+                        ) { padding ->
+                            TranscriptChatScreen(
+                                state = state,
+                                onBack = { finish() },
+                                onConfirmConsent = { scenario = SCENARIO_INDEXING },
+                                onDismissConsent = { finish() },
+                                onModeChange = { mode = it },
+                                onDraftChange = { draft = it },
+                                onSend = { scenario = SCENARIO_ANSWERING },
+                                onStop = { scenario = SCENARIO_CANCELLED },
+                                onRetry = { scenario = SCENARIO_COMPLETED },
+                                onNewConversation = {
+                                    scenario = SCENARIO_EMPTY
+                                    draft = SYNTHETIC_QUESTION
+                                },
+                                onDeleteConversation = { scenario = SCENARIO_EMPTY },
+                                document = syntheticDocument(),
+                                modifier = Modifier.padding(padding),
+                            )
+                        }
+                    }
                 }
             }
             if (forceLargeText) {

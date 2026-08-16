@@ -2,6 +2,7 @@ package com.stt.benchmark.ui.chat
 
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -50,7 +51,7 @@ class TranscriptChatScreenTest {
             onConfirmConsent = { confirmed = true },
         )
 
-        compose.onNodeWithText("전사와 대화를 준비할까요?").assertIsDisplayed()
+        compose.onNodeWithText("전사 기반 AI 대화를 준비할까요?").assertIsDisplayed()
         compose.onNodeWithText("동의하고 준비").performClick()
         assertTrue(confirmed)
     }
@@ -60,7 +61,7 @@ class TranscriptChatScreenTest {
         render(baseState().copy(isAuthenticated = false, phase = TranscriptChatPhase.ERROR))
 
         compose.onNodeWithText("ChatGPT 연결 필요").assertIsDisplayed()
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(4)
+        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(3)
         compose.onNodeWithText("저장된 대화가 없습니다").assertExists()
         compose.onNodeWithContentDescription("전사 질문 전송").assertIsNotEnabled()
     }
@@ -79,7 +80,6 @@ class TranscriptChatScreenTest {
 
         compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(2)
         compose.onNodeWithText("2/5 단계 · 40%").assertIsDisplayed()
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(7)
         compose.onNodeWithContentDescription("답변 또는 탐색 중지")
             .assertIsEnabled()
             .assertHasClickAction()
@@ -94,6 +94,8 @@ class TranscriptChatScreenTest {
                 indexReady = true,
                 preciseAvailable = true,
                 mode = TranscriptChatMode.PRECISE,
+                completedSteps = 5,
+                totalSteps = 5,
                 draftQuestion = "유지할 질문",
                 messages = listOf(
                     TranscriptChatSessionStore.Message(
@@ -109,8 +111,10 @@ class TranscriptChatScreenTest {
             document = sourceDocument(),
         )
 
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(4)
+        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(3)
         compose.onNodeWithText("저장된 답변 [U0001]").assertExists()
+        compose.onNodeWithText("5/5 단계 · 100%").assertDoesNotExist()
+        compose.onAllNodesWithContentDescription("근거 U0001 확인").assertCountEquals(1)
         compose.onAllNodesWithContentDescription("근거 U0001 확인").onFirst()
             .assertHasClickAction()
             .performSemanticsAction(SemanticsActions.OnClick)
@@ -121,10 +125,10 @@ class TranscriptChatScreenTest {
         compose.onNodeWithText("근거 확인").assertDoesNotExist()
         compose.onNodeWithText("저장된 답변 [U0001]").assertExists()
         compose.onNodeWithText("유지할 질문").assertExists()
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(3)
+        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(2)
         compose.onNodeWithText("전체 정밀 탐색").assertExists()
 
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(4)
+        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(3)
         compose.onAllNodesWithContentDescription("근거 U0001 확인").onFirst().performClick()
         compose.onNodeWithContentDescription("근거 확인을 닫고 대화로 돌아가기").performClick()
         compose.onNodeWithText("근거 확인").assertDoesNotExist()
@@ -229,9 +233,7 @@ class TranscriptChatScreenTest {
             }
         }
 
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(6)
         compose.onNodeWithContentDescription("전사 질문 전송").assertIsDisplayed()
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(7)
         compose.onNodeWithContentDescription("전사 채팅 재시도").assertIsDisplayed()
     }
 
@@ -247,7 +249,6 @@ class TranscriptChatScreenTest {
             ),
         )
 
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(7)
         compose.onNodeWithContentDescription("답변 또는 탐색 중지").assertIsDisplayed()
     }
 
@@ -275,7 +276,6 @@ class TranscriptChatScreenTest {
             }
         }
 
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(7)
         compose.onNodeWithText("대화 삭제").performClick()
         compose.onNodeWithText("원본 전사, 요약, 검색 인덱스는 유지됩니다.", substring = true).assertIsDisplayed()
         compose.onNodeWithText("대화만 삭제").performClick()
@@ -297,7 +297,7 @@ class TranscriptChatScreenTest {
             }
         }
 
-        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(4)
+        compose.onNodeWithTag("transcript_chat_scroll").performScrollToIndex(3)
         compose.onNodeWithText("핵심 결정은 무엇인가요?").performClick()
 
         assertEquals("핵심 결정은 무엇인가요?", draft)

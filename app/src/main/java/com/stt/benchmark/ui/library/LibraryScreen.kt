@@ -389,11 +389,11 @@ fun LibraryRoute(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .archiveTouchTarget()
-                                .semantics { contentDescription = "그룹 전사와 대화" },
+                                .semantics { contentDescription = "그룹 전사를 AI에게 질문" },
                         ) {
                             Icon(Icons.Outlined.Chat, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
-                            Text("전사와 대화")
+                            Text("AI에게 전사 질문")
                         }
                         TranscriptExportActions(
                             inProgress = routeState.exportInProgress,
@@ -549,11 +549,11 @@ fun LibraryRoute(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .archiveTouchTarget()
-                                .semantics { contentDescription = "전사와 대화" },
+                                .semantics { contentDescription = "전사를 AI에게 질문" },
                         ) {
                             Icon(Icons.Outlined.Chat, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
-                            Text("전사와 대화")
+                            Text("AI에게 전사 질문")
                         }
                         TranscriptExportActions(
                             inProgress = routeState.exportInProgress,

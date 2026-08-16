@@ -50,7 +50,7 @@ object TranscriptChatPolicy {
             return SourceValidation.Rejected("내용이 있는 완료 전사만 대화할 수 있습니다.")
         }
         if (count > MAX_TRANSCRIPT_CHARS) {
-            return SourceValidation.Rejected("전사와 대화는 ${MAX_TRANSCRIPT_CHARS}자 이하에서 지원합니다.")
+            return SourceValidation.Rejected("전사 기반 AI 대화는 ${MAX_TRANSCRIPT_CHARS}자 이하에서 지원합니다.")
         }
         return SourceValidation.Ready(document, count, fingerprint(document))
     }

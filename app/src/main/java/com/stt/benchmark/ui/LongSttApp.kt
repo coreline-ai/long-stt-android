@@ -105,6 +105,14 @@ fun LongSttApp(
         val navController = rememberNavController()
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
+        val hierarchyRoutes = currentDestination?.hierarchy
+            ?.mapNotNull { it.route }
+            ?.toSet()
+            .orEmpty()
+        val selectedTopLevelDestination = resolveSelectedTopLevelDestination(
+            isTranscriptChat = currentDestination?.route == TRANSCRIPT_CHAT_ROUTE,
+            hierarchyRoutes = hierarchyRoutes,
+        )
         val showNavigationLabels = shouldShowNavigationLabels(LocalDensity.current.fontScale)
         var pendingResultType by rememberSaveable { mutableStateOf("") }
         var pendingResultId by rememberSaveable { mutableStateOf("") }
@@ -130,76 +138,31 @@ fun LongSttApp(
             modifier = modifier.fillMaxSize(),
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                if (currentDestination?.route != TRANSCRIPT_CHAT_ROUTE) NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ) {
-                    AppDestination.entries.forEach { destination ->
-                        val selected = currentDestination?.hierarchy?.any {
-                            it.route == destination.route
-                        } == true
-                        NavigationBarItem(
-                            selected = selected,
-                            alwaysShowLabel = showNavigationLabels,
-                            onClick = {
-                                val restoreDestinationState = shouldRestoreTopLevelState(destination)
-                                if (destination == AppDestination.LIBRARY) {
-                                    // Saved top-level destinations may restore without re-running
-                                    // the route LaunchedEffect, so refresh on every explicit tap.
-                                    sttViewModel.refreshLibraries()
-                                    codexAuthViewModel.refreshSummaryEntries()
-                                }
-                                navController.navigate(destination.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        // Library is a live archive view. Recreate it instead of
-                                        // restoring a stale saved entry or an old detail dialog.
-                                        // Recording is the start destination, so restoring state
-                                        // there can revive a previously saved child tab instead.
-                                        saveState = restoreDestinationState
-                                    }
-                                    launchSingleTop = true
-                                    restoreState = restoreDestinationState
-                                }
-                            },
-                            icon = {
-                                Box {
-                                    Icon(
-                                        destination.icon,
-                                        contentDescription = buildString {
-                                            append(destination.label)
-                                            if (
-                                                destination == AppDestination.RECORDING &&
-                                                recordingState.isRecorderActive
-                                            ) append(", 녹음 진행 중")
-                                        },
-                                    )
-                                    if (
-                                        destination == AppDestination.RECORDING &&
-                                        recordingState.isRecorderActive
-                                    ) {
-                                        Box(
-                                            Modifier
-                                                .align(Alignment.TopEnd)
-                                                .size(8.dp)
-                                                .clip(CircleShape)
-                                                .background(MaterialTheme.colorScheme.error),
-                                        )
-                                    }
-                                }
-                            },
-                            // Four Korean labels cannot retain a safe visual separation at 200%
-                            // font scale. Icon descriptions still expose the destination to
-                            // TalkBack while the visible label is intentionally compacted.
-                            label = if (showNavigationLabels) ({ Text(destination.label) }) else null,
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            ),
-                        )
-                    }
-                }
+                ArchiveBottomBar(
+                    selectedDestination = selectedTopLevelDestination,
+                    recordingActive = recordingState.isRecorderActive,
+                    showLabels = showNavigationLabels,
+                    onNavigate = { destination ->
+                        val restoreDestinationState = shouldRestoreTopLevelState(destination)
+                        if (destination == AppDestination.LIBRARY) {
+                            // Saved top-level destinations may restore without re-running
+                            // the route LaunchedEffect, so refresh on every explicit tap.
+                            sttViewModel.refreshLibraries()
+                            codexAuthViewModel.refreshSummaryEntries()
+                        }
+                        navController.navigate(destination.route) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                // Library is a live archive view. Recreate it instead of
+                                // restoring a stale saved entry or an old detail dialog.
+                                // Recording is the start destination, so restoring state
+                                // there can revive a previously saved child tab instead.
+                                saveState = restoreDestinationState
+                            }
+                            launchSingleTop = true
+                            restoreState = restoreDestinationState
+                        }
+                    },
+                )
             },
         ) { padding ->
             NavHost(
@@ -298,6 +261,66 @@ fun LongSttApp(
     }
 }
 
+@Composable
+internal fun ArchiveBottomBar(
+    selectedDestination: AppDestination,
+    recordingActive: Boolean,
+    showLabels: Boolean,
+    onNavigate: (AppDestination) -> Unit,
+) {
+    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+        AppDestination.entries.forEach { destination ->
+            NavigationBarItem(
+                selected = destination == selectedDestination,
+                alwaysShowLabel = showLabels,
+                onClick = { onNavigate(destination) },
+                icon = {
+                    Box {
+                        Icon(
+                            destination.icon,
+                            contentDescription = buildString {
+                                append(destination.label)
+                                if (destination == AppDestination.RECORDING && recordingActive) {
+                                    append(", 녹음 진행 중")
+                                }
+                            },
+                        )
+                        if (destination == AppDestination.RECORDING && recordingActive) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.error),
+                            )
+                        }
+                    }
+                },
+                // Four Korean labels cannot retain a safe visual separation at 200%
+                // font scale. Icon descriptions still expose the destination to TalkBack.
+                label = if (showLabels) ({ Text(destination.label) }) else null,
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
+            )
+        }
+    }
+}
+
+/** Chat is a focused child of the live archive and therefore keeps Library selected. */
+internal fun resolveSelectedTopLevelDestination(
+    isTranscriptChat: Boolean,
+    hierarchyRoutes: Set<String>,
+): AppDestination = when {
+    isTranscriptChat -> AppDestination.LIBRARY
+    else -> AppDestination.entries.firstOrNull { it.route in hierarchyRoutes }
+        ?: AppDestination.RECORDING
+}
+
 /**
  * The live archive is always recreated, while the graph start destination must be revealed
  * directly. Restoring state for the start destination can restore a saved child back stack and
@@ -314,7 +337,7 @@ internal fun shouldRestoreTopLevelState(destination: AppDestination): Boolean = 
 }
 
 @Composable
-private fun SystemBarAppearance(darkBackground: Boolean) {
+internal fun SystemBarAppearance(darkBackground: Boolean) {
     val view = LocalView.current
     SideEffect {
         val window = (view.context as? android.app.Activity)?.window ?: return@SideEffect

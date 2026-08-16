@@ -59,7 +59,7 @@
 | 🗃️ **통합 보관함** | 녹음 그룹·단일 전사·원본 오디오 연결, 전체 전사 보기, 결과와 원본의 독립 삭제 |
 | 📄 **외부 추출** | 완료 전사 전체를 UTF-8 TXT로 저장하거나 캐시 파일로 Android Sharesheet에 공유 |
 | ✨ **선택적 요약** | 사용자 동의 후 구간 요약·통합·저장 진행률 표시, 목록 완료 상태와 요약 공유 |
-| 💬 **전사 근거 채팅** | 완료 전사의 관련 구간만 보내는 빠른 질문, 사용자 선택 전체 정밀 탐색, 스트리밍·중지·재시도, 강조된 근거 확인 후 즉시 대화 복귀 |
+| 💬 **전사 근거 채팅** | 완료 전사의 관련 구간만 보내는 빠른 질문, 사용자 선택 전체 정밀 탐색, 메시지 결합형 근거, 고정 입력창, 검증 근거·주변 문맥 확인 후 즉시 대화 복귀 |
 | 🧭 **완료 결과 이동** | 완료 CTA 영구 복원, 정확한 결과 상세 열기, 완료 알림 딥링크, 삭제·손상 target 안전 폴백 |
 | 🔐 **보안 경계** | OAuth token은 Android Keystore 보호·loopback state 선검증, Whisper 모델은 고정 revision/SHA-256 검증, 완료 target은 type/ID만 저장, 전사 원문 자동 전송 금지 |
 | 📊 **벤치마크** | RTF, 처리 시간, 기기 정보, CSV v2 결과와 session identity 기록 |
@@ -112,14 +112,14 @@
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/screenshots/07-chat-completed.png" width="300" alt="전사 기반 질문과 검증된 근거 최신 화면" /><br />
-      <b>빠른 질문과 검증된 근거</b><br />
-      합성 답변과 허용된 시간 근거만 표시
+      <img src="docs/screenshots/07-chat-completed.png" width="300" alt="전사 기반 AI 대화와 검증된 근거 최신 화면" /><br />
+      <b>전사 기반 AI 대화</b><br />
+      보관함 문맥을 유지하며 질문·답변·허용된 시간 근거 표시
     </td>
     <td align="center" width="50%">
       <img src="docs/screenshots/08-chat-citation-viewer.png" width="300" alt="전사 근거 구간 확인 최신 화면" /><br />
       <b>근거 확인과 대화 복귀</b><br />
-      참조 구간을 강조하고 기존 대화로 즉시 복귀
+      검증 근거와 주변 문맥을 분리하고 고정 버튼으로 즉시 복귀
     </td>
   </tr>
 </table>
@@ -245,13 +245,13 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 | 4 | 완료 CTA 또는 완료 알림의 **결과 보기**로 정확한 보관함 상세를 엽니다. |
 | 5 | **전사 전체 보기**, **TXT 저장**, **파일로 공유**를 필요할 때 선택합니다. |
 | 6 | 외부 요약은 안내를 확인하고 동의한 경우에만 시작합니다. |
-| 7 | 완료 상세의 **전사와 대화**에서 안내에 동의한 뒤 빠른 질문 또는 전체 정밀 탐색을 선택합니다. |
+| 7 | 완료 상세의 **AI에게 전사 질문**에서 안내에 동의한 뒤 빠른 질문 또는 전체 정밀 탐색을 선택합니다. |
 
 ## ✅ 검증 상태
 
 | 검증 항목 | 최신 결과 |
 |---|---|
-| 앱 JVM / Robolectric / Compose | **255 passed / 0 failed / 0 skipped** · 모델 revision·SHA-256·host 정책과 완료 알림·TXT·공유 핵심 계약 포함 |
+| 앱 JVM / Robolectric / Compose | **256 passed / 0 failed / 0 skipped** · 하단 destination 선택, 모델 revision·SHA-256·host 정책과 완료 알림·TXT·공유 핵심 계약 포함 |
 | OAuth 모듈 | **44 passed / 0 failed / 0 skipped** · state 누락/불일치 loopback callback이 정상 로그인을 선점하지 않는 회귀 포함 |
 | Android lint / 산출물 | API 36 Release lint **0 errors / 37 warnings**, Release APK/AAB, 16KB alignment, Release surface gate 통과 |
 | 배포 서명 파이프라인 | keyless gate fail-closed, 일회성 외부 JKS로 signed AAB·`jarsigner`·SHA-256 provenance 종단간 검증 후 key 삭제 |
@@ -263,7 +263,7 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 | 장시간 가져오기 | bounded stream copy, `.part → final`, 실패 partial 정리 자동 검증 |
 | 접근성 | font scale 200%·실제 360dp급 세로 폭에서 상태·CTA·공유 버튼 잘림 없음 |
 | P2 전사 채팅 | 정책·원문 없는 AtomicFile·한국어 검색·digest·스트리밍·정밀 탐색·citation·회전 복원 자동 검증 |
-| 근거 확인·복귀 | 채팅 내부 full-screen viewer, 근거 구간 강조, 상·하단 즉시 복귀, draft/message/mode 보존, 잘못된 key 실패 안전 검증 |
+| 근거 확인·복귀 | 채팅 내부 full-screen viewer, 검증 근거·주변 문맥 카드, 상·하단 즉시 복귀, system bar 안전 여백, draft/message/mode 보존, 잘못된 key 실패 안전 검증 |
 | Samsung P2 합성 smoke | citation → 강조 viewer → 상단·하단·Android back 복귀, 200% 글자 도달성, 질문·답변·mode 보존, 서비스/wake lock 0 실제 터치 확인 |
 | 장시간 녹음 | 20분 rollover, 1시간·6시간 녹음, 8시간 이상 soak 기준선 통과 |
 | 백그라운드 그룹 STT | 4-child·19-child handoff와 coverage aggregate 통과 |
@@ -326,7 +326,7 @@ app/src/main/
 codex-oauth-android/                  # source-parity OAuth 모듈
 config/                               # 에셋 provenance와 font policy
 dev-plan/                             # 단계별 구현·검증 계획
-docs/                                 # 빌드·기기 QA·핸드오프·최신 6개 화면
+docs/                                 # 빌드·기기 QA·핸드오프·최신 8개 화면
 scripts/                              # whisper 준비·오디오·실험 자동화
 third_party/whisper.cpp.lock          # 고정 upstream commit
 ```
@@ -337,6 +337,7 @@ third_party/whisper.cpp.lock          # 고정 upstream commit
 |---|---|
 | [`docs/README.md`](docs/README.md) | 현재 문서·역사 문서 구분과 읽기 순서 |
 | [`docs/HANDOFF_20260815.md`](docs/HANDOFF_20260815.md) | 최신 프로젝트 구조·보안·운영 handoff |
+| [`dev-plan/implement_20260816_090437.md`](dev-plan/implement_20260816_090437.md) | 전사 기반 AI 대화·근거 viewer 디자인과 하단 내비게이션 정합성 |
 | [`docs/BUILD_WHISPER.md`](docs/BUILD_WHISPER.md) | 고정 whisper.cpp source와 native build |
 | [`docs/ANDROID_16KB_PAGE_SIZE.md`](docs/ANDROID_16KB_PAGE_SIZE.md) | Android 16KB page size 대응 |
 | [`docs/PRODUCTION_SIGNING.md`](docs/PRODUCTION_SIGNING.md) | 외부 keystore 기반 signed AAB·provenance 생성 절차 |
