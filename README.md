@@ -112,12 +112,12 @@
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/screenshots/07-chat-completed.png" width="300" alt="전사 기반 AI 대화와 검증된 근거 최신 화면" /><br />
+      <img src="docs/screenshots/07-transcript-ai-chat-20260816.png" width="300" alt="전사 기반 AI 대화와 검증된 근거 최신 화면 · 2026-08-16" /><br />
       <b>전사 기반 AI 대화</b><br />
       보관함 문맥을 유지하며 질문·답변·허용된 시간 근거 표시
     </td>
     <td align="center" width="50%">
-      <img src="docs/screenshots/08-chat-citation-viewer.png" width="300" alt="전사 근거 구간 확인 최신 화면" /><br />
+      <img src="docs/screenshots/08-transcript-citation-viewer-20260816.png" width="300" alt="전사 근거 구간 확인 최신 화면 · 2026-08-16" /><br />
       <b>근거 확인과 대화 복귀</b><br />
       검증 근거와 주변 문맥을 분리하고 고정 버튼으로 즉시 복귀
     </td>
