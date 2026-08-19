@@ -337,6 +337,7 @@ third_party/whisper.cpp.lock          # 고정 upstream commit
 |---|---|
 | [`docs/README.md`](docs/README.md) | 현재 문서·역사 문서 구분과 읽기 순서 |
 | [`docs/HANDOFF_20260815.md`](docs/HANDOFF_20260815.md) | 최신 프로젝트 구조·보안·운영 handoff |
+| [`dev-plan/implement_20260819_160712.md`](dev-plan/implement_20260819_160712.md) | 개인 Google Drive 업로드 후속 개발 계획 · **구현 미착수** |
 | [`dev-plan/implement_20260816_090437.md`](dev-plan/implement_20260816_090437.md) | 전사 기반 AI 대화·근거 viewer 디자인과 하단 내비게이션 정합성 |
 | [`docs/BUILD_WHISPER.md`](docs/BUILD_WHISPER.md) | 고정 whisper.cpp source와 native build |
 | [`docs/ANDROID_16KB_PAGE_SIZE.md`](docs/ANDROID_16KB_PAGE_SIZE.md) | Android 16KB page size 대응 |

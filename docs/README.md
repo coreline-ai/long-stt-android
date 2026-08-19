@@ -1,6 +1,6 @@
 # Long STT Android 문서 안내
 
-기준일: `2026-08-15 KST`
+기준일: `2026-08-19 KST`
 
 이 디렉터리는 현재 운영 문서와 과거 검토·실험 기록을 함께 보존한다. 상태가 충돌하면 아래 우선순위를 따른다.
 
@@ -13,6 +13,14 @@
 | 3 | [`VERIFICATION_COMPLETION_20260814.md`](VERIFICATION_COMPLETION_20260814.md) | 사용자·실장비 검증 완료 확인 |
 | 4 | [`SECURITY_REVIEW_20260815.md`](SECURITY_REVIEW_20260815.md) | 배포 전 보안 검토와 4개 필수 구현 결과 |
 | 5 | [`PRODUCTION_SIGNING.md`](PRODUCTION_SIGNING.md) | 외부 secret 기반 signed AAB 생성 절차 |
+
+## 진행 예정 개발
+
+| 문서 | 현재 상태 | 범위 |
+|---|---|---|
+| [`../dev-plan/implement_20260819_160712.md`](../dev-plan/implement_20260819_160712.md) | 계획 검토·보완 완료, 구현 미착수 | 개인 Google Drive 직접·자동 업로드와 Drive 앱 공유 폴백 |
+
+진행 예정 문서는 현재 구현 정본이 아니다. 기능 완료 여부는 README와 최신 HANDOFF를 우선한다.
 
 ## 빌드·플랫폼 문서
 
