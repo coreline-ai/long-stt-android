@@ -35,6 +35,8 @@ data class DriveUploadSettings(
     val connected: Boolean = false,
     val autoUploadMode: DriveAutoUploadMode = DriveAutoUploadMode.OFF,
     val autoEnabledAtMs: Long = 0L,
+    /** 연결 해제 뒤 이전 Worker가 전송을 재개하지 못하게 하는 로컬 세대값. */
+    val connectionGeneration: Long = 0L,
 )
 
 data class DriveUploadJob(
@@ -42,6 +44,10 @@ data class DriveUploadJob(
     val exportId: String,
     val source: TranscriptSourceRef,
     val requestedArtifacts: Set<DriveArtifact>,
+    /** 사용자가 상세 화면에서 직접 선택한 artifact. */
+    val manualArtifacts: Set<DriveArtifact> = requestedArtifacts,
+    /** 자동 업로드 opt-in으로 추가된 artifact. 자동 OFF 때 미완료 항목만 제거한다. */
+    val automaticArtifacts: Set<DriveArtifact> = emptySet(),
     val completedArtifacts: Set<DriveArtifact> = emptySet(),
     val status: DriveUploadStatus = DriveUploadStatus.QUEUED,
     val activeArtifact: DriveArtifact? = null,
@@ -52,6 +58,8 @@ data class DriveUploadJob(
     val driveFileIds: Map<DriveArtifact, String> = emptyMap(),
     val retryCount: Int = 0,
     val errorCode: String = "",
+    /** 이 작업을 만든 Drive 연결 세대. token·계정 식별자는 저장하지 않는다. */
+    val connectionGeneration: Long = 0L,
     val createdAtMs: Long,
     val updatedAtMs: Long,
 ) {
@@ -59,12 +67,21 @@ data class DriveUploadJob(
         require(jobId.matches(SAFE_ID)) { "invalid Drive upload job" }
         require(exportId.matches(SAFE_ID)) { "invalid Drive export" }
         require(source.id.matches(SAFE_ID)) { "invalid Drive source" }
-        require(requestedArtifacts.isNotEmpty()) { "Drive upload needs an artifact" }
+        require(requestedArtifacts.isNotEmpty() || status == DriveUploadStatus.CANCELLED) {
+            "Drive upload needs an artifact"
+        }
+        require(manualArtifacts.all { it in requestedArtifacts }) { "invalid manual artifact" }
+        require(automaticArtifacts.all { it in requestedArtifacts }) { "invalid automatic artifact" }
+        require(requestedArtifacts.all { it in manualArtifacts || it in automaticArtifacts }) {
+            "Drive artifact has no upload intent"
+        }
         require(completedArtifacts.all { it in requestedArtifacts }) { "invalid completed artifact" }
         require(driveFileIds.keys.all { it in requestedArtifacts }) { "invalid Drive artifact id" }
     }
 
     val hasPendingArtifact: Boolean get() = requestedArtifacts.any { it !in completedArtifacts }
+    val hasManualPendingArtifact: Boolean get() = manualArtifacts.any { it !in completedArtifacts }
+    val hasAutomaticPendingArtifact: Boolean get() = automaticArtifacts.any { it !in completedArtifacts }
     val isComplete: Boolean get() = !hasPendingArtifact
     val progressFraction: Float
         get() = if (totalBytes > 0L) {

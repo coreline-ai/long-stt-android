@@ -26,14 +26,29 @@ class DriveUploadScheduler(
         completedAtMs: Long,
     ): DriveUploadJob? = store.enqueueAutomatic(source, artifact, completedAtMs)?.also(::enqueue)
 
+    fun setAutoUploadMode(mode: DriveAutoUploadMode) {
+        applyCancellation(store.setAutoUploadMode(mode))
+    }
+
+    fun clearConnection() {
+        applyCancellation(store.clearConnection())
+    }
+
     fun retry(jobId: String): Boolean {
-        val job = store.find(jobId) ?: return false
-        if (!job.hasPendingArtifact) return false
+        val job = store.runnableJob(jobId) ?: return false
         enqueue(job)
         return true
     }
 
-    private fun enqueue(job: DriveUploadJob) {
+    private fun applyCancellation(cancellation: DriveWorkCancellation) {
+        cancellation.cancelJobIds.forEach { jobId ->
+            workManager.cancelUniqueWork(workName(jobId))
+        }
+        // 수동 artifact가 남은 job은 이전 Worker를 교체해 자동 artifact가 다시 전송되지 않게 한다.
+        cancellation.reenqueueJobs.forEach { job -> enqueue(job, ExistingWorkPolicy.REPLACE) }
+    }
+
+    private fun enqueue(job: DriveUploadJob, policy: ExistingWorkPolicy = UNIQUE_WORK_POLICY) {
         val request = OneTimeWorkRequestBuilder<DriveUploadWorker>()
             .setInputData(workDataOf(DriveUploadWorker.KEY_JOB_ID to job.jobId))
             .setConstraints(
@@ -44,12 +59,13 @@ class DriveUploadScheduler(
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, MIN_BACKOFF_SECONDS, TimeUnit.SECONDS)
             .addTag(WORK_TAG)
             .build()
-        // 같은 결과의 작업은 순차 실행한다. 완료 callback이 중복되어도 원문 payload는 추가되지 않는다.
-        workManager.enqueueUniqueWork(workName(job.jobId), ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        // 같은 job의 중복 callback은 새 대기열을 만들지 않는다. Worker는 최신 store 상태를 반복 조회한다.
+        workManager.enqueueUniqueWork(workName(job.jobId), policy, request)
     }
 
     companion object {
         const val WORK_TAG = "long_stt_drive_upload"
+        internal val UNIQUE_WORK_POLICY = ExistingWorkPolicy.KEEP
         private const val MIN_BACKOFF_SECONDS = 10L
 
         fun workName(jobId: String): String = "long_stt_drive_$jobId"

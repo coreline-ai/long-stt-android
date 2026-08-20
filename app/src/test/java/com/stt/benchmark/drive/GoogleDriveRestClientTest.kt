@@ -3,6 +3,7 @@ package com.stt.benchmark.drive
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
@@ -53,9 +54,77 @@ class GoogleDriveRestClientTest {
         assertEquals("Bearer synthetic-token", session.requestHeaders["Authorization"])
         assertEquals("text/plain", session.requestHeaders["X-Upload-Content-Type"])
         assertEquals("text/plain", upload.requestHeaders["Content-Type"])
+        assertFalse(session.instanceFollowRedirects)
+        assertFalse(upload.instanceFollowRedirects)
         assertTrue(session.requestBody.toString(Charsets.UTF_8.name()).contains("longSttExportId"))
         assertFalse(session.requestBody.toString(Charsets.UTF_8.name()).contains("audioPath"))
         assertFalse(session.requestBody.toString(Charsets.UTF_8.name()).contains("transcriptText"))
+    }
+
+    @Test
+    fun resumableUploadContinuesFromServerConfirmed308Range() = runBlocking {
+        val session = FakeConnection(
+            url = URL("https://www.googleapis.com/upload/drive/v3/files"),
+            responseCode = HttpURLConnection.HTTP_OK,
+            responseHeaders = mapOf("Location" to "https://www.googleapis.com/upload/resumable/synthetic"),
+        )
+        val firstChunk = FakeConnection(
+            url = URL("https://www.googleapis.com/upload/resumable/synthetic"),
+            responseCode = 308,
+            responseHeaders = mapOf("Range" to "bytes=0-2"),
+        )
+        val completed = FakeConnection(
+            url = URL("https://www.googleapis.com/upload/resumable/synthetic"),
+            responseCode = HttpURLConnection.HTTP_CREATED,
+            responseBody = "{\"id\":\"drive_file_range\",\"size\":\"9\"}",
+        )
+        val connections = ArrayDeque(listOf(session, firstChunk, completed))
+        val progress = mutableListOf<Long>()
+        val client = GoogleDriveRestClient { connections.removeFirst() }
+
+        val uploaded = client.uploadResumable(
+            accessToken = "synthetic-token",
+            file = syntheticFile("123456789"),
+            folderId = "drive_folder_synthetic",
+            exportId = "export_synthetic",
+            artifact = DriveArtifact.TRANSCRIPT,
+            onProgress = { sent, _ -> progress += sent },
+        )
+
+        assertEquals("drive_file_range", uploaded.id)
+        assertEquals("bytes 0-8/9", firstChunk.requestHeaders["Content-Range"])
+        assertEquals("bytes 3-8/9", completed.requestHeaders["Content-Range"])
+        assertEquals("456789", completed.requestBody.toString(Charsets.UTF_8.name()))
+        assertEquals(listOf(3L), progress)
+    }
+
+    @Test
+    fun resumableUploadRejectsOutOfRequest308Range() {
+        val session = FakeConnection(
+            url = URL("https://www.googleapis.com/upload/drive/v3/files"),
+            responseCode = HttpURLConnection.HTTP_OK,
+            responseHeaders = mapOf("Location" to "https://www.googleapis.com/upload/resumable/synthetic"),
+        )
+        val invalidRange = FakeConnection(
+            url = URL("https://www.googleapis.com/upload/resumable/synthetic"),
+            responseCode = 308,
+            responseHeaders = mapOf("Range" to "bytes=0-99"),
+        )
+        val connections = ArrayDeque(listOf(session, invalidRange))
+        val client = GoogleDriveRestClient { connections.removeFirst() }
+
+        assertThrows(IOException::class.java) {
+            runBlocking {
+                client.uploadResumable(
+                    accessToken = "synthetic-token",
+                    file = syntheticFile("123456789"),
+                    folderId = "drive_folder_synthetic",
+                    exportId = "export_synthetic",
+                    artifact = DriveArtifact.TRANSCRIPT,
+                    onProgress = { _, _ -> },
+                )
+            }
+        }
     }
 
     @Test

@@ -18,7 +18,7 @@
 
 | 문서 | 현재 상태 | 범위 |
 |---|---|---|
-| [`../dev-plan/implement_20260819_160712.md`](../dev-plan/implement_20260819_160712.md) | 계획 검토·보완 완료, 구현 미착수 | 개인 Google Drive 직접·자동 업로드와 Drive 앱 공유 폴백 |
+| [`../dev-plan/implement_20260819_160712.md`](../dev-plan/implement_20260819_160712.md) | 소스 구현·자동 검증 완료, OAuth 운영 설정·실기기 검증 대기 | 개인 Google Drive 직접·자동 업로드와 Drive 앱 공유 폴백 |
 
 진행 예정 문서는 현재 구현 정본이 아니다. 기능 완료 여부는 README와 최신 HANDOFF를 우선한다.
 

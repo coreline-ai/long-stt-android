@@ -3,9 +3,9 @@ package com.stt.benchmark.drive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -187,9 +187,11 @@ internal class GoogleDriveRestClient(
         onProgress: (sentBytes: Long, totalBytes: Long) -> Unit,
     ): DriveRemoteFile {
         var offset = 0L
+        var stalledResumeResponses = 0
         val buffer = ByteArray(CHUNK_SIZE_BYTES)
-        BufferedInputStream(file.inputStream()).use { input ->
+        RandomAccessFile(file, "r").use { input ->
             while (offset < totalBytes) {
+                input.seek(offset)
                 val count = input.read(buffer, 0, minOf(buffer.size.toLong(), totalBytes - offset).toInt())
                 if (count <= 0) throw IOException("Drive export file changed during upload")
                 val end = offset + count - 1L
@@ -203,7 +205,17 @@ internal class GoogleDriveRestClient(
                     connection.outputStream.use { it.write(buffer, 0, count) }
                     when (val code = connection.responseCode) {
                         HTTP_RESUME_INCOMPLETE -> {
-                            offset += count
+                            val nextOffset = confirmedNextOffset(
+                                rangeHeader = connection.getHeaderField("Range"),
+                                requestedOffset = offset,
+                                requestedEnd = end,
+                                totalBytes = totalBytes,
+                            )
+                            stalledResumeResponses = if (nextOffset <= offset) stalledResumeResponses + 1 else 0
+                            if (stalledResumeResponses > MAX_STALLED_RESUME_RESPONSES) {
+                                throw IOException("Drive upload did not acknowledge progress")
+                            }
+                            offset = nextOffset
                             onProgress(offset, totalBytes)
                         }
 
@@ -230,11 +242,30 @@ internal class GoogleDriveRestClient(
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             useCaches = false
+            instanceFollowRedirects = false
             setRequestProperty("Authorization", "Bearer $accessToken")
             setRequestProperty("Accept", "application/json")
         }
 
     private fun HttpURLConnection.readResponse(): String = inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+    /** Drive 308의 Range는 서버가 저장을 확인한 마지막 byte다. 없으면 아직 받은 byte가 없다는 뜻이다. */
+    private fun confirmedNextOffset(
+        rangeHeader: String?,
+        requestedOffset: Long,
+        requestedEnd: Long,
+        totalBytes: Long,
+    ): Long {
+        val header = rangeHeader?.trim().orEmpty()
+        if (header.isEmpty()) return 0L
+        val match = RANGE_HEADER.matchEntire(header) ?: throw IOException("invalid Drive resume range")
+        val lastConfirmed = match.groupValues[1].toLongOrNull() ?: throw IOException("invalid Drive resume range")
+        if (lastConfirmed < 0L || lastConfirmed >= totalBytes) throw IOException("invalid Drive resume range")
+        if (lastConfirmed > requestedEnd) throw IOException("invalid Drive resume range")
+        // 새 session에서도 server가 request 시작 전보다 뒤를 확인했다고 주장하면 경계를 넘지 않는다.
+        if (lastConfirmed + 1L < requestedOffset) throw IOException("invalid Drive resume range")
+        return lastConfirmed + 1L
+    }
 
     private fun JSONObject.toRemoteFile(): DriveRemoteFile? = optString("id")
         .takeIf(String::isNotBlank)
@@ -275,7 +306,9 @@ internal class GoogleDriveRestClient(
         private const val READ_TIMEOUT_MS = 60_000
         private const val CHUNK_SIZE_BYTES = 256 * 1024
         private const val HTTP_RESUME_INCOMPLETE = 308
+        private const val MAX_STALLED_RESUME_RESPONSES = 2
         private val EXPORT_ID_REGEX = Regex("[A-Za-z0-9_-]+")
+        private val RANGE_HEADER = Regex("bytes=0-(\\d+)")
         private val FOLDER_NAME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss", Locale.ROOT)
     }
 }

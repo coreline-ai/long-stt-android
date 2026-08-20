@@ -1,6 +1,7 @@
 package com.stt.benchmark.drive
 
 import android.content.Context
+import androidx.work.ExistingWorkPolicy
 import androidx.test.core.app.ApplicationProvider
 import com.stt.benchmark.data.TranscriptSourceRef
 import com.stt.benchmark.data.TranscriptSourceType
@@ -9,6 +10,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -75,6 +77,60 @@ class DriveUploadStoreTest {
         val duplicate = store.enqueue(source, setOf(DriveArtifact.SUMMARY), nowMs = 150L)
         assertEquals(DriveUploadStatus.COMPLETED, duplicate.status)
         assertFalse(duplicate.hasPendingArtifact)
+    }
+
+    @Test
+    fun disablingAutomaticUploadCancelsAutomaticArtifactButKeepsManualIntent() {
+        val store = DriveUploadStore(context)
+        store.markConnected()
+        store.setAutoUploadMode(DriveAutoUploadMode.TRANSCRIPT_AND_SUMMARY, nowMs = 10L)
+        val automatic = requireNotNull(
+            store.enqueueAutomatic(source, DriveArtifact.TRANSCRIPT, completedAtMs = 10L, nowMs = 11L),
+        )
+        val merged = store.enqueue(source, setOf(DriveArtifact.SUMMARY), nowMs = 12L)
+
+        val cancellation = store.setAutoUploadMode(DriveAutoUploadMode.OFF, nowMs = 20L)
+        val after = requireNotNull(store.find(automatic.jobId))
+
+        assertEquals(automatic.jobId, merged.jobId)
+        assertEquals(setOf(DriveArtifact.SUMMARY), after.requestedArtifacts)
+        assertEquals(setOf(DriveArtifact.SUMMARY), after.manualArtifacts)
+        assertTrue(after.automaticArtifacts.isEmpty())
+        assertEquals(DriveUploadStatus.QUEUED, after.status)
+        assertEquals(setOf(automatic.jobId), cancellation.cancelJobIds)
+        assertEquals(listOf(automatic.jobId), cancellation.reenqueueJobs.map(DriveUploadJob::jobId))
+        assertEquals(DriveArtifact.SUMMARY, requireNotNull(store.runnableJob(automatic.jobId)).requestedArtifacts.single())
+    }
+
+    @Test
+    fun disconnectCancelsPendingJobsAndInvalidatesTheirConnectionGeneration() {
+        val store = DriveUploadStore(context)
+        store.markConnected()
+        val first = store.enqueue(source, setOf(DriveArtifact.TRANSCRIPT), nowMs = 10L)
+        val second = store.enqueue(
+            TranscriptSourceRef(TranscriptSourceType.TRANSCRIPTION_SESSION, "stt_synthetic_drive_second"),
+            setOf(DriveArtifact.SUMMARY),
+            nowMs = 11L,
+        )
+
+        val cancellation = store.clearConnection(nowMs = 20L)
+        val disconnected = store.snapshot()
+
+        assertFalse(disconnected.settings.connected)
+        assertEquals(1L, disconnected.settings.connectionGeneration)
+        assertEquals(setOf(first.jobId, second.jobId), cancellation.cancelJobIds)
+        assertTrue(disconnected.jobs.all { it.status == DriveUploadStatus.CANCELLED })
+        assertNull(store.runnableJob(first.jobId))
+
+        store.markConnected()
+        val reconnected = store.enqueue(source, setOf(DriveArtifact.TRANSCRIPT), nowMs = 30L)
+        assertNotEquals(first.jobId, reconnected.jobId)
+        assertEquals(1L, reconnected.connectionGeneration)
+    }
+
+    @Test
+    fun duplicateCallbacksUseKeepInsteadOfAppendingAdditionalWork() {
+        assertEquals(ExistingWorkPolicy.KEEP, DriveUploadScheduler.UNIQUE_WORK_POLICY)
     }
 
     @Test

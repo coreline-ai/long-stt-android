@@ -255,14 +255,14 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 
 | 검증 항목 | 최신 결과 |
 |---|---|
-| 앱 JVM / Robolectric / Compose | **264 passed / 0 failed / 0 skipped** · Drive 상태 저장·캐시 TXT·resumable 요청 계약을 포함해 완료 알림·TXT·공유 핵심 계약 확인 |
+| 앱 JVM / Robolectric / Compose | **269 passed / 0 failed / 0 skipped** · Drive 연결 해제·자동 OFF 취소, 중복 work 차단, cache TXT·308 resumable 요청 계약을 포함해 완료 알림·TXT·공유 핵심 계약 확인 |
 | OAuth 모듈 | **44 passed / 0 failed / 0 skipped** · state 누락/불일치 loopback callback이 정상 로그인을 선점하지 않는 회귀 포함 |
-| Android lint / 산출물 | API 36 Release lint **0 errors / 37 warnings**, Release APK/AAB, 16KB alignment, Release surface gate 통과 |
+| Android lint / 산출물 | API 36 Release lint **0 errors / 40 warnings**, Release APK/AAB, 16KB alignment, Release surface gate 통과 |
 | 배포 서명 파이프라인 | keyless gate fail-closed, 일회성 외부 JKS로 signed AAB·`jarsigner`·SHA-256 provenance 종단간 검증 후 key 삭제 |
 | Samsung P0 | 데이터 보존 설치, 완료 CTA·알림 딥링크·cold start 복원 통과 |
 | Samsung P1 자동 smoke | 격리 deviceTest 8건 통과·실마이크/AICore 5건 opt-in 건너뜀, OAuth Keystore 2건 통과 |
 | 녹음 입력 전환 | 일반 입력 분류만 actor로 직렬화, 일시적 미확정 경로 확인, 변경 시 기존 청크 확정→새 청크 재시작, 200% 글자 안내 자동 검증 |
-| Google Drive 직접 업로드 | `drive.file` 단일 scope, 원문·token·경로 없는 job metadata, resumable 요청·신뢰할 수 없는 session URL 거부, 기본 OFF 자동 업로드 자동 검증. 실제 Google 계정 승인·외부 업로드는 미실행 |
+| Google Drive 직접 업로드 | `drive.file` 단일 scope, 원문·token·경로 없는 job metadata, 연결 해제·자동 OFF 시 대기/실행 job 취소, `KEEP` 중복 차단, 308 `Range`·redirect 차단 자동 검증. 실제 Google 계정 승인·외부 업로드는 미실행 |
 | 완료 상세 안정성 | 연속 클릭·가로/세로 회전·닫기·재진입 시 중복 dialog 없음 |
 | 공유 안정성 | 요약/TXT chooser 취소, handler 없음·보안 예외·provider/쓰기 실패 처리 통과 |
 | 장시간 가져오기 | bounded stream copy, `.part → final`, 실패 partial 정리 자동 검증 |
@@ -342,7 +342,7 @@ third_party/whisper.cpp.lock          # 고정 upstream commit
 |---|---|
 | [`docs/README.md`](docs/README.md) | 현재 문서·역사 문서 구분과 읽기 순서 |
 | [`docs/HANDOFF_20260815.md`](docs/HANDOFF_20260815.md) | 최신 프로젝트 구조·보안·운영 handoff |
-| [`dev-plan/implement_20260819_160712.md`](dev-plan/implement_20260819_160712.md) | 개인 Google Drive 업로드 후속 개발 계획 · **구현 미착수** |
+| [`dev-plan/implement_20260819_160712.md`](dev-plan/implement_20260819_160712.md) | 개인 Google Drive 업로드 소스 구현·자동 검증 완료 · OAuth 운영 설정·실기기 검증 대기 |
 | [`dev-plan/implement_20260816_090437.md`](dev-plan/implement_20260816_090437.md) | 전사 기반 AI 대화·근거 viewer 디자인과 하단 내비게이션 정합성 |
 | [`docs/BUILD_WHISPER.md`](docs/BUILD_WHISPER.md) | 고정 whisper.cpp source와 native build |
 | [`docs/ANDROID_16KB_PAGE_SIZE.md`](docs/ANDROID_16KB_PAGE_SIZE.md) | Android 16KB page size 대응 |

@@ -10,6 +10,7 @@ import com.stt.benchmark.data.TranscriptionSessionStore
 import com.stt.benchmark.summary.SummaryRequestPolicy
 import com.stt.benchmark.summary.SummarySessionStore
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 
 /**
  * 네트워크가 가능한 경우에만 실행되는 Drive 전송기.
@@ -30,15 +31,15 @@ class DriveUploadWorker(
     override suspend fun doWork(): Result {
         val jobId = inputData.getString(KEY_JOB_ID).orEmpty()
         if (!jobId.matches(DriveUploadJob.SAFE_ID)) return Result.failure()
-        val initial = store.find(jobId) ?: return Result.success()
-        if (!initial.hasPendingArtifact) return Result.success()
+        if (store.runnableJob(jobId) == null) return Result.success()
 
         store.markPreparing(jobId)
-        var job = store.find(jobId) ?: return Result.success()
-        val document = loadDocument(job) ?: run {
+        val initial = store.runnableJob(jobId) ?: return Result.success()
+        val document = loadDocument(initial) ?: run {
             store.markFailed(jobId, "SOURCE_UNAVAILABLE")
             return Result.failure()
         }
+        if (store.runnableJob(jobId) == null) return Result.success()
         var token = when (val outcome = authorization.authorize()) {
             is GoogleDriveAuthorizationGateway.Outcome.Granted -> outcome.token
             is GoogleDriveAuthorizationGateway.Outcome.NeedsUserAction,
@@ -50,12 +51,17 @@ class DriveUploadWorker(
         }
 
         try {
-            job.pendingArtifacts().forEach { artifact ->
-                token = uploadArtifact(jobId, artifact, document, token)
-                job = store.find(jobId) ?: return Result.success()
+            // KEEP 정책으로 같은 job의 callback을 합치므로, 매 반복마다 최신 영속 상태를 다시 읽는다.
+            while (true) {
+                val job = store.runnableJob(jobId) ?: return Result.success()
+                val artifact = job.pendingArtifacts().firstOrNull() ?: return Result.success()
+                token = uploadArtifact(jobId, artifact, document, token) ?: return Result.success()
             }
-            return Result.success()
+        } catch (cancelled: CancellationException) {
+            // WorkManager cancel은 실패/재시도로 상태를 되돌리지 않는다.
+            throw cancelled
         } catch (failure: DriveHttpException) {
+            if (store.runnableJob(jobId) == null) return Result.success()
             return when {
                 failure.statusCode == HTTP_UNAUTHORIZED -> {
                     authorization.clearToken(token)
@@ -74,60 +80,72 @@ class DriveUploadWorker(
                 }
             }
         } catch (_: IOException) {
+            if (store.runnableJob(jobId) == null) return Result.success()
             store.markRetry(jobId, "NETWORK")
             return Result.retry()
         } catch (_: SecurityException) {
+            if (store.runnableJob(jobId) == null) return Result.success()
             store.markFailed(jobId, "SECURITY")
             return Result.failure()
         } catch (_: IllegalArgumentException) {
+            if (store.runnableJob(jobId) == null) return Result.success()
             store.markFailed(jobId, "INVALID_SOURCE")
             return Result.failure()
         } catch (_: Exception) {
+            if (store.runnableJob(jobId) == null) return Result.success()
             store.markFailed(jobId, "UPLOAD_ERROR")
             return Result.failure()
         }
     }
 
+    /** null은 연결 해제·자동 OFF·job 취소로 외부 전송을 멈췄다는 뜻이다. */
     private suspend fun uploadArtifact(
         jobId: String,
         artifact: DriveArtifact,
         document: TranscriptSourceDocument,
         initialToken: String,
-    ): String {
+    ): String? {
         var token = initialToken
         repeat(MAX_SESSION_ATTEMPTS) {
-            val job = store.find(jobId) ?: return token
+            if (runnableJobForArtifact(jobId, artifact) == null) return null
             val root = drive.ensureRootFolder(token)
-            val folder = drive.ensureExportFolder(token, root.id, job.exportId, job.createdAtMs)
+            val activeJob = runnableJobForArtifact(jobId, artifact) ?: return null
+            val folder = drive.ensureExportFolder(token, root.id, activeJob.exportId, activeJob.createdAtMs)
             store.markFolder(jobId, folder.id)
-            val alreadyUploaded = drive.findArtifact(token, job.exportId, artifact, folder.id)
+            val currentJob = runnableJobForArtifact(jobId, artifact) ?: return null
+            val alreadyUploaded = drive.findArtifact(token, currentJob.exportId, artifact, folder.id)
             if (alreadyUploaded != null) {
                 store.markArtifactCompleted(jobId, artifact, alreadyUploaded.id)
                 return token
             }
+            val exportJob = runnableJobForArtifact(jobId, artifact) ?: return null
             val export = when (artifact) {
-                DriveArtifact.TRANSCRIPT -> exportFiles.createTranscript(job, document)
-                DriveArtifact.SUMMARY -> loadSummary(job)?.let { summary -> exportFiles.createSummary(job, summary) }
+                DriveArtifact.TRANSCRIPT -> exportFiles.createTranscript(exportJob, document)
+                DriveArtifact.SUMMARY -> loadSummary(exportJob)?.let { summary -> exportFiles.createSummary(exportJob, summary) }
                     ?: run {
                         store.markFailed(jobId, "SUMMARY_UNAVAILABLE")
                         throw IllegalArgumentException("summary unavailable")
                     }
             }
+            if (runnableJobForArtifact(jobId, artifact) == null) return null
             try {
                 val remoteFile = drive.uploadResumable(
                     accessToken = token,
                     file = export.file,
                     folderId = folder.id,
-                    exportId = job.exportId,
+                    exportId = exportJob.exportId,
                     artifact = artifact,
                 ) { sent, total ->
                     store.markUploading(jobId, artifact, sent, total)
                 }
+                // Work 취소가 HTTP 완료와 경합해도 취소한 artifact를 완료 상태로 되살리지 않는다.
+                if (runnableJobForArtifact(jobId, artifact) == null) return null
                 store.markArtifactCompleted(jobId, artifact, remoteFile.id)
                 return token
             } catch (failure: DriveHttpException) {
                 if (failure.statusCode == HTTP_UNAUTHORIZED) {
                     authorization.clearToken(token)
+                    if (runnableJobForArtifact(jobId, artifact) == null) return null
                     token = when (val refreshed = authorization.authorize()) {
                         is GoogleDriveAuthorizationGateway.Outcome.Granted -> refreshed.token
                         is GoogleDriveAuthorizationGateway.Outcome.NeedsUserAction,
@@ -146,6 +164,11 @@ class DriveUploadWorker(
         }
         throw IOException("Drive resumable upload retry exhausted")
     }
+
+    private fun runnableJobForArtifact(jobId: String, artifact: DriveArtifact): DriveUploadJob? =
+        store.runnableJob(jobId)?.takeIf { job ->
+            artifact in job.requestedArtifacts && artifact !in job.completedArtifacts
+        }
 
     private fun loadDocument(job: DriveUploadJob): TranscriptSourceDocument? = TranscriptSourceReader.resolve(
         source = job.source,

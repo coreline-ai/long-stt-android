@@ -312,7 +312,7 @@ fun SettingsScreen(
                 },
             )
             Text(
-                "전체 전사와 완료된 요약만 선택해 내 Drive에 저장합니다. 계정 이름·이메일·token은 앱에 표시하거나 저장하지 않습니다.",
+                "전체 전사와 완료된 요약만 선택해 내 Drive에 저장합니다. 자동 업로드를 끄거나 연결을 해제하면 대기·진행 작업을 중단합니다. 계정 이름·이메일·token은 앱에 표시하거나 저장하지 않습니다.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -58,7 +58,11 @@ class GoogleDriveViewModel(application: Application) : AndroidViewModel(applicat
 
     fun requestConnection() = beginAuthorization(PendingAction.CONNECT)
 
-    fun disconnect() = beginAuthorization(PendingAction.DISCONNECT)
+    fun disconnect() {
+        // 권한 철회 PendingIntent를 기다리는 동안에도 기존 Worker가 계속 전송하지 않게 먼저 취소한다.
+        scheduler.clearConnection()
+        beginAuthorization(PendingAction.DISCONNECT)
+    }
 
     fun onAuthorizationResult(intent: Intent?) {
         val action = pendingAction ?: PendingAction.CONNECT
@@ -72,10 +76,10 @@ class GoogleDriveViewModel(application: Application) : AndroidViewModel(applicat
             refresh("자동 업로드를 사용하려면 먼저 Google Drive를 연결하세요.")
             return
         }
-        store.setAutoUploadMode(mode)
+        scheduler.setAutoUploadMode(mode)
         refresh(
             when (mode) {
-                DriveAutoUploadMode.OFF -> "자동 업로드를 끕니다. 이미 완료된 Drive 파일은 유지됩니다."
+                DriveAutoUploadMode.OFF -> "자동 업로드 대기·전송을 중단합니다. 수동으로 요청한 파일과 기존 Drive 파일은 유지됩니다."
                 DriveAutoUploadMode.TRANSCRIPT_ONLY -> "지금 이후 완료되는 전체 전사를 자동 업로드합니다."
                 DriveAutoUploadMode.TRANSCRIPT_AND_SUMMARY -> "지금 이후 완료되는 전사와 완료된 요약을 자동 업로드합니다."
             },
@@ -118,7 +122,6 @@ class GoogleDriveViewModel(application: Application) : AndroidViewModel(applicat
 
                 PendingAction.DISCONNECT -> {
                     val revoked = authorization.revoke(outcome)
-                    store.clearConnection()
                     refresh(
                         if (revoked) "Google Drive 권한과 자동 업로드를 해제했습니다. 기존 Drive 파일은 유지됩니다."
                         else "기기 내 Drive 연결과 자동 업로드를 해제했습니다. 기존 권한은 Google 계정 설정에서 확인할 수 있습니다.",
@@ -135,7 +138,6 @@ class GoogleDriveViewModel(application: Application) : AndroidViewModel(applicat
 
             is GoogleDriveAuthorizationGateway.Outcome.Failure -> {
                 if (action == PendingAction.DISCONNECT) {
-                    store.clearConnection()
                     refresh("기기 내 Drive 연결과 자동 업로드를 해제했습니다.")
                 } else {
                     _uiState.value = _uiState.value.copy(
