@@ -25,6 +25,8 @@ data class LibraryRouteUiState(
     val summaryConsentSourceId: String = "",
     val pendingExportSourceType: String = "",
     val pendingExportSourceId: String = "",
+    val pendingDriveUploadSourceType: String = "",
+    val pendingDriveUploadSourceId: String = "",
     val exportInProgress: Boolean = false,
     val exportStatusMessage: String = "",
 )
@@ -45,6 +47,16 @@ val LibraryRouteUiState.pendingExportSource: TranscriptSourceRef?
             TranscriptSourceRef(
                 type = TranscriptSourceType.valueOf(type),
                 id = pendingExportSourceId,
+            )
+        }.getOrNull()
+    }
+
+val LibraryRouteUiState.pendingDriveUploadSource: TranscriptSourceRef?
+    get() = pendingDriveUploadSourceType.takeIf(String::isNotBlank)?.let { type ->
+        runCatching {
+            TranscriptSourceRef(
+                type = TranscriptSourceType.valueOf(type),
+                id = pendingDriveUploadSourceId,
             )
         }.getOrNull()
     }
@@ -113,6 +125,10 @@ class LibraryRouteViewModel(
         exportInProgress = false,
         exportStatusMessage = message,
     )
+    fun requestDriveUpload(source: TranscriptSourceRef) = update(
+        pendingDriveUploadSourceType = source.type.name,
+        pendingDriveUploadSourceId = source.id,
+    )
 
     fun dismissSession() = update(selectedSessionId = "")
     fun dismissFullTranscript() = update(
@@ -132,6 +148,10 @@ class LibraryRouteViewModel(
         exportInProgress = false,
         exportStatusMessage = "",
     )
+    fun dismissDriveUpload() = update(
+        pendingDriveUploadSourceType = "",
+        pendingDriveUploadSourceId = "",
+    )
 
     private fun load() = LibraryRouteUiState(
         selectedSessionId = savedStateHandle.get<String>(SELECTED_SESSION).orEmpty(),
@@ -147,6 +167,8 @@ class LibraryRouteViewModel(
         summaryConsentSourceId = savedStateHandle.get<String>(SUMMARY_CONSENT_ID).orEmpty(),
         pendingExportSourceType = savedStateHandle.get<String>(PENDING_EXPORT_TYPE).orEmpty(),
         pendingExportSourceId = savedStateHandle.get<String>(PENDING_EXPORT_ID).orEmpty(),
+        pendingDriveUploadSourceType = savedStateHandle.get<String>(PENDING_DRIVE_UPLOAD_TYPE).orEmpty(),
+        pendingDriveUploadSourceId = savedStateHandle.get<String>(PENDING_DRIVE_UPLOAD_ID).orEmpty(),
     )
 
     private fun update(
@@ -163,6 +185,8 @@ class LibraryRouteViewModel(
         summaryConsentSourceId: String = _uiState.value.summaryConsentSourceId,
         pendingExportSourceType: String = _uiState.value.pendingExportSourceType,
         pendingExportSourceId: String = _uiState.value.pendingExportSourceId,
+        pendingDriveUploadSourceType: String = _uiState.value.pendingDriveUploadSourceType,
+        pendingDriveUploadSourceId: String = _uiState.value.pendingDriveUploadSourceId,
         exportInProgress: Boolean = _uiState.value.exportInProgress,
         exportStatusMessage: String = _uiState.value.exportStatusMessage,
     ) {
@@ -180,6 +204,8 @@ class LibraryRouteViewModel(
             summaryConsentSourceId = summaryConsentSourceId,
             pendingExportSourceType = pendingExportSourceType,
             pendingExportSourceId = pendingExportSourceId,
+            pendingDriveUploadSourceType = pendingDriveUploadSourceType,
+            pendingDriveUploadSourceId = pendingDriveUploadSourceId,
             exportInProgress = exportInProgress,
             exportStatusMessage = exportStatusMessage,
         )
@@ -197,6 +223,8 @@ class LibraryRouteViewModel(
         savedStateHandle[SUMMARY_CONSENT_ID] = next.summaryConsentSourceId
         savedStateHandle[PENDING_EXPORT_TYPE] = next.pendingExportSourceType
         savedStateHandle[PENDING_EXPORT_ID] = next.pendingExportSourceId
+        savedStateHandle[PENDING_DRIVE_UPLOAD_TYPE] = next.pendingDriveUploadSourceType
+        savedStateHandle[PENDING_DRIVE_UPLOAD_ID] = next.pendingDriveUploadSourceId
     }
 
     private companion object {
@@ -213,5 +241,7 @@ class LibraryRouteViewModel(
         const val SUMMARY_CONSENT_ID = "library.summaryConsentId"
         const val PENDING_EXPORT_TYPE = "library.pendingExportType"
         const val PENDING_EXPORT_ID = "library.pendingExportId"
+        const val PENDING_DRIVE_UPLOAD_TYPE = "library.pendingDriveUploadType"
+        const val PENDING_DRIVE_UPLOAD_ID = "library.pendingDriveUploadId"
     }
 }

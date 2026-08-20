@@ -5,6 +5,7 @@ import com.stt.benchmark.core.AppLog
 import com.stt.benchmark.recording.RecordingRecoveryCoordinator
 import com.stt.benchmark.data.RecordingTranscriptionGroupStore
 import com.stt.benchmark.export.TranscriptFileShareFactory
+import com.stt.benchmark.drive.DriveExportFileFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -50,6 +51,11 @@ class SttApp : Application() {
                 TranscriptFileShareFactory(this@SttApp).cleanupExpired(processStartedAtMs)
             }.onFailure { error ->
                 AppLog.e(TAG, "전사 공유 cache 정리 실패: ${error.javaClass.simpleName}")
+            }
+            runCatching {
+                DriveExportFileFactory(this@SttApp).cleanupExpired(processStartedAtMs)
+            }.onFailure { error ->
+                AppLog.e(TAG, "Drive 공유 cache 정리 실패: ${error.javaClass.simpleName}")
             }
         }
     }

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -37,8 +38,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -62,6 +65,13 @@ import com.stt.benchmark.export.TranscriptDocumentSaver
 import com.stt.benchmark.export.TranscriptDocumentLauncher
 import com.stt.benchmark.export.TranscriptExportWriter
 import com.stt.benchmark.export.TranscriptFileShareFactory
+import com.stt.benchmark.drive.DriveArtifact
+import com.stt.benchmark.drive.DriveConnectionPhase
+import com.stt.benchmark.drive.DriveUploadJob
+import com.stt.benchmark.drive.DriveUploadStatus
+import com.stt.benchmark.drive.GoogleDriveUiState
+import com.stt.benchmark.drive.GoogleDriveViewModel
+import com.stt.benchmark.drive.toSummarySourceType
 import com.stt.benchmark.summary.CodexAuthPhase
 import com.stt.benchmark.summary.CodexAuthUiState
 import com.stt.benchmark.summary.CodexAuthViewModel
@@ -94,6 +104,7 @@ import kotlinx.coroutines.withContext
 fun LibraryRoute(
     viewModel: SttViewModel,
     codexAuthViewModel: CodexAuthViewModel,
+    googleDriveViewModel: GoogleDriveViewModel,
     onOpenTranscription: () -> Unit,
     onOpenTranscriptChat: (TranscriptSourceRef) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -109,6 +120,7 @@ fun LibraryRoute(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val auth by codexAuthViewModel.uiState.collectAsStateWithLifecycle()
     val summaryState by codexAuthViewModel.summaryUiState.collectAsStateWithLifecycle()
+    val driveState by googleDriveViewModel.uiState.collectAsStateWithLifecycle()
     val routeState by routeViewModel.uiState.collectAsStateWithLifecycle()
     val selected = state.resultSessions.firstOrNull { it.sessionId == routeState.selectedSessionId }
     val fullTranscriptSession = state.resultSessions.firstOrNull {
@@ -126,6 +138,9 @@ fun LibraryRoute(
     val resultSessionsById = state.resultSessions.associateBy(TranscriptionSessionStore.Checkpoint::sessionId)
     val consentCandidate = routeState.summaryConsentSource?.let { source ->
         summaryCandidateFor(source, state.resultSessions, state.recordingGroups)
+    }
+    val driveUploadCandidate = routeState.pendingDriveUploadSource?.let { source ->
+        TranscriptSourceReader.resolve(source, state.resultSessions, state.recordingGroups)
     }
     val selectedSessionDocument = selected?.let(TranscriptSourceReader::fromCompletedSession)
     val selectedGroupDocument = selectedGroup?.let {
@@ -239,6 +254,9 @@ fun LibraryRoute(
                 routeViewModel.finishTranscriptExport("저장할 완료 전사를 찾을 수 없습니다.")
             }
         }
+        if (routeState.pendingDriveUploadSource != null && driveUploadCandidate == null) {
+            routeViewModel.dismissDriveUpload()
+        }
     }
 
     LaunchedEffect(initialCompletedResult, initialTranscriptSectionKey, state.resultLibraryLoaded) {
@@ -296,6 +314,7 @@ fun LibraryRoute(
                     RecordingGroupRow(
                         group = group,
                         summaryState = summaryState,
+                        drive = driveState,
                         summaryEligible = auth.phase == CodexAuthPhase.AUTHENTICATED &&
                             group.status == RecordingTranscriptionGroupStore.GroupStatus.COMPLETED &&
                             group.children.all { child ->
@@ -316,6 +335,7 @@ fun LibraryRoute(
                     TranscriptRow(
                         session = session,
                         summaryState = summaryState,
+                        drive = driveState,
                         summaryEligible = auth.phase == CodexAuthPhase.AUTHENTICATED &&
                             session.status == TranscriptionSessionStore.Status.COMPLETED &&
                             session.chunks.any { it.text.isNotBlank() },
@@ -400,6 +420,12 @@ fun LibraryRoute(
                             statusMessage = routeState.exportStatusMessage,
                             onSave = { requestDocumentSave(document) },
                             onShare = { requestFileShare(document) },
+                        )
+                        DriveUploadActions(
+                            drive = driveState,
+                            source = document.source,
+                            onUpload = { routeViewModel.requestDriveUpload(document.source) },
+                            onRetry = googleDriveViewModel::retry,
                         )
                     }
                     group.children.forEach { child ->
@@ -561,6 +587,12 @@ fun LibraryRoute(
                             onSave = { requestDocumentSave(document) },
                             onShare = { requestFileShare(document) },
                         )
+                        DriveUploadActions(
+                            drive = driveState,
+                            source = document.source,
+                            onUpload = { routeViewModel.requestDriveUpload(document.source) },
+                            onRetry = googleDriveViewModel::retry,
+                        )
                     }
                     SectionLabel("전사 미리보기")
                     Text(
@@ -612,6 +644,21 @@ fun LibraryRoute(
         )
     }
 
+    driveUploadCandidate?.let { document ->
+        val hasSummary = summaryState.entries.any { entry ->
+            entry.source.type == document.source.type.toSummarySourceType() &&
+                entry.source.id == document.source.id
+        }
+        DriveUploadSelectionDialog(
+            hasSummary = hasSummary,
+            onConfirm = { artifacts ->
+                googleDriveViewModel.enqueueManual(document.source, artifacts)
+                routeViewModel.dismissDriveUpload()
+            },
+            onDismiss = routeViewModel::dismissDriveUpload,
+        )
+    }
+
     fullTranscriptSession?.let { session ->
         FullTranscriptDialog(
             title = "전체 전사",
@@ -644,6 +691,157 @@ fun LibraryRoute(
             onDismiss = routeViewModel::dismissFullTranscript,
         )
     }
+}
+
+@Composable
+private fun DriveUploadActions(
+    drive: GoogleDriveUiState,
+    source: TranscriptSourceRef,
+    onUpload: () -> Unit,
+    onRetry: (String) -> Unit,
+) {
+    val job = drive.latestJob(source)
+    val uploading = job?.status in setOf(
+        DriveUploadStatus.QUEUED,
+        DriveUploadStatus.PREPARING,
+        DriveUploadStatus.UPLOADING,
+        DriveUploadStatus.RETRY_WAIT,
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedButton(
+        onClick = onUpload,
+        enabled = !uploading,
+        modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
+    ) { Text(if (job?.status == DriveUploadStatus.COMPLETED) "Google Drive 저장됨" else "Google Drive에 업로드") }
+    when {
+        drive.connectionPhase == DriveConnectionPhase.REAUTH_REQUIRED -> Text(
+            "Google Drive 재연결이 필요합니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+
+        job == null -> Unit
+        uploading -> {
+            LinearProgressIndicator(
+                progress = { job.progressFraction },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                job.status.uploadLabel(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        job.status == DriveUploadStatus.PARTIAL_COMPLETED -> Text(
+            "전사 또는 요약 일부가 Google Drive에 저장되었습니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        job.status == DriveUploadStatus.COMPLETED -> Text(
+            "선택한 파일을 Google Drive에 저장했습니다.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        job.status in setOf(DriveUploadStatus.FAILED, DriveUploadStatus.AUTH_REQUIRED) -> {
+            Text(
+                if (job.status == DriveUploadStatus.AUTH_REQUIRED) {
+                    "Google Drive 재연결 후 다시 시도하세요."
+                } else {
+                    "Google Drive 업로드를 완료하지 못했습니다."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            OutlinedButton(
+                onClick = { onRetry(job.jobId) },
+                modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
+            ) { Text("Google Drive 업로드 다시 시도") }
+        }
+
+        else -> Unit
+    }
+}
+
+/** 보관함에서 전사·요약의 Drive 저장 결과를 한눈에 구분하는 상태 행. */
+@Composable
+private fun DriveUploadListIndicator(
+    job: DriveUploadJob?,
+    modifier: Modifier = Modifier,
+) {
+    val (label, color) = when (job?.status) {
+        null -> return
+        DriveUploadStatus.QUEUED,
+        DriveUploadStatus.PREPARING,
+        DriveUploadStatus.UPLOADING,
+        DriveUploadStatus.RETRY_WAIT,
+        -> job.status.uploadLabel() to MaterialTheme.colorScheme.onSurfaceVariant
+
+        DriveUploadStatus.PARTIAL_COMPLETED -> "Google Drive 일부 저장됨" to MaterialTheme.colorScheme.onSurfaceVariant
+        DriveUploadStatus.COMPLETED -> "Google Drive 저장됨" to MaterialTheme.colorScheme.primary
+        DriveUploadStatus.AUTH_REQUIRED -> "Google Drive 재연결 필요" to MaterialTheme.colorScheme.error
+        DriveUploadStatus.FAILED -> "Google Drive 업로드 실패" to MaterialTheme.colorScheme.error
+        DriveUploadStatus.CANCELLED -> "Google Drive 업로드 취소됨" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Text(
+        label,
+        modifier = modifier,
+        style = MaterialTheme.typography.bodySmall,
+        color = color,
+    )
+}
+
+@Composable
+private fun DriveUploadSelectionDialog(
+    hasSummary: Boolean,
+    onConfirm: (Set<DriveArtifact>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var includeTranscript by remember { mutableStateOf(true) }
+    var includeSummary by remember(hasSummary) { mutableStateOf(hasSummary) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Google Drive에 업로드") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("선택한 파일을 개인 Google Drive의 Long STT 폴더에 저장합니다.")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = includeTranscript, onCheckedChange = { includeTranscript = it })
+                    Text("전체 전사 TXT")
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = includeSummary,
+                        enabled = hasSummary,
+                        onCheckedChange = { includeSummary = it },
+                    )
+                    Text(if (hasSummary) "완료된 요약 TXT" else "완료된 요약이 없습니다.")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onConfirm(buildSet {
+                        if (includeTranscript) add(DriveArtifact.TRANSCRIPT)
+                        if (includeSummary && hasSummary) add(DriveArtifact.SUMMARY)
+                    })
+                },
+                enabled = includeTranscript || (includeSummary && hasSummary),
+            ) { Text("업로드") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
+    )
+}
+
+private fun DriveUploadStatus.uploadLabel(): String = when (this) {
+    DriveUploadStatus.QUEUED -> "Google Drive 업로드 대기 중"
+    DriveUploadStatus.PREPARING -> "Google Drive 파일을 준비하고 있습니다."
+    DriveUploadStatus.UPLOADING -> "Google Drive에 업로드하고 있습니다."
+    DriveUploadStatus.RETRY_WAIT -> "네트워크 재시도를 기다리고 있습니다."
+    else -> ""
 }
 
 internal fun completedResultToOpen(
@@ -886,6 +1084,7 @@ internal fun SummaryConsentDialog(
 private fun TranscriptRow(
     session: TranscriptionSessionStore.Checkpoint,
     summaryState: SummaryUiState,
+    drive: GoogleDriveUiState,
     summaryEligible: Boolean,
     onOpen: () -> Unit,
 ) {
@@ -932,6 +1131,12 @@ private fun TranscriptRow(
                 StatusPill(session.status.archiveLabel(), tone = session.status.archiveTone())
             }
             SummaryListIndicator(state = listState, modifier = Modifier.padding(start = 36.dp, end = 8.dp))
+            DriveUploadListIndicator(
+                job = drive.latestJob(
+                    TranscriptSourceRef(TranscriptSourceType.TRANSCRIPTION_SESSION, session.sessionId),
+                ),
+                modifier = Modifier.padding(start = 36.dp, end = 8.dp),
+            )
         }
     }
 }
@@ -940,6 +1145,7 @@ private fun TranscriptRow(
 private fun RecordingGroupRow(
     group: RecordingTranscriptionGroupStore.Group,
     summaryState: SummaryUiState,
+    drive: GoogleDriveUiState,
     summaryEligible: Boolean,
     onOpen: () -> Unit,
 ) {
@@ -978,6 +1184,12 @@ private fun RecordingGroupRow(
                 StatusPill(group.status.archiveLabel(), tone = group.status.archiveTone())
             }
             SummaryListIndicator(state = listState, modifier = Modifier.padding(start = 36.dp, end = 8.dp))
+            DriveUploadListIndicator(
+                job = drive.latestJob(
+                    TranscriptSourceRef(TranscriptSourceType.RECORDING_GROUP, group.groupId),
+                ),
+                modifier = Modifier.padding(start = 36.dp, end = 8.dp),
+            )
         }
     }
 }

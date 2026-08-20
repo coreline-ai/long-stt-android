@@ -47,6 +47,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.stt.benchmark.summary.CodexAuthViewModel
+import com.stt.benchmark.drive.GoogleDriveViewModel
 import com.stt.benchmark.data.TranscriptSourceReader
 import com.stt.benchmark.data.TranscriptSourceRef
 import com.stt.benchmark.data.TranscriptSourceType
@@ -86,6 +87,7 @@ fun LongSttApp(
     var onboardingComplete by remember { mutableStateOf(preferences.isComplete()) }
     val darkTheme = isSystemInDarkTheme()
     val recordingViewModel: RecordingViewModel = viewModel()
+    val googleDriveViewModel: GoogleDriveViewModel = viewModel()
     val recordingState by recordingViewModel.uiState.collectAsStateWithLifecycle()
 
     SttBenchmarkTheme(darkTheme = darkTheme) {
@@ -215,6 +217,7 @@ fun LongSttApp(
                     LibraryRoute(
                         viewModel = sttViewModel,
                         codexAuthViewModel = codexAuthViewModel,
+                        googleDriveViewModel = googleDriveViewModel,
                         onOpenTranscription = {
                             navController.navigate(AppDestination.TRANSCRIPTION.route) {
                                 launchSingleTop = true
@@ -250,6 +253,7 @@ fun LongSttApp(
                     SettingsRoute(
                         viewModel = sttViewModel,
                         codexAuthViewModel = codexAuthViewModel,
+                        googleDriveViewModel = googleDriveViewModel,
                         onReplayOnboarding = {
                             preferences.setComplete(false)
                             onboardingComplete = false

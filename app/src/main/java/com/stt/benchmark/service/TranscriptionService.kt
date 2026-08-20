@@ -22,6 +22,11 @@ import com.stt.benchmark.data.TerminalCheckpointPersistence
 import com.stt.benchmark.data.TranscriptionLifecyclePolicy
 import com.stt.benchmark.data.TranscriptionPlan
 import com.stt.benchmark.data.TranscriptionSessionStore
+import com.stt.benchmark.data.TranscriptSourceRef
+import com.stt.benchmark.data.TranscriptSourceType
+import com.stt.benchmark.drive.DriveArtifact
+import com.stt.benchmark.drive.DriveUploadScheduler
+import com.stt.benchmark.data.RecordingTranscriptionGroupStore
 import com.stt.benchmark.recording.RecordingTranscriptionCoordinator
 import com.stt.benchmark.whisper.AudioDecoder
 import com.stt.benchmark.whisper.TranscriptSegment
@@ -496,6 +501,11 @@ class TranscriptionService : Service() {
         } else null
         if (completedTarget != null) {
             withContext(Dispatchers.IO) { completedResultTargetStore.save(completedTarget) }
+            runCatching {
+                enqueueAutomaticDriveTranscript(checkpoint, completedTarget)
+            }.onFailure { error ->
+                AppLog.e(TAG, "Drive 자동 업로드 예약 실패: ${error.javaClass.simpleName}")
+            }
         }
         publishStatus(
             checkpoint.sessionId,
@@ -506,6 +516,31 @@ class TranscriptionService : Service() {
             detail.ifBlank { checkpoint.errorMessage }
         )
         if (completedTarget != null) completionNotifier.post(completedTarget)
+    }
+
+    /** 완료 target과 동일한 opaque type/ID만 사용해 자동 Drive 작업을 예약한다. */
+    private fun enqueueAutomaticDriveTranscript(
+        checkpoint: TranscriptionSessionStore.Checkpoint,
+        target: CompletedResultTargetStore.Target,
+    ) {
+        val source = when (target.type) {
+            CompletedResultTargetStore.Type.TRANSCRIPTION_SESSION -> TranscriptSourceRef(
+                TranscriptSourceType.TRANSCRIPTION_SESSION,
+                target.id,
+            )
+
+            CompletedResultTargetStore.Type.RECORDING_GROUP -> RecordingTranscriptionGroupStore(this)
+                .load(target.id)
+                ?.takeIf { group ->
+                    group.status == RecordingTranscriptionGroupStore.GroupStatus.COMPLETED && !group.isPartial
+                }
+                ?.let { TranscriptSourceRef(TranscriptSourceType.RECORDING_GROUP, target.id) }
+        } ?: return
+        DriveUploadScheduler(this).enqueueAutomatic(
+            source = source,
+            artifact = DriveArtifact.TRANSCRIPT,
+            completedAtMs = checkpoint.updatedAtMs,
+        )
     }
 
     /**

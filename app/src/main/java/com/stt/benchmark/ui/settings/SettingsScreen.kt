@@ -1,6 +1,8 @@
 package com.stt.benchmark.ui.settings
 
 import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -42,6 +44,10 @@ import com.stt.benchmark.data.ModelDownloader
 import com.stt.benchmark.summary.CodexAuthPhase
 import com.stt.benchmark.summary.CodexAuthUiState
 import com.stt.benchmark.summary.CodexAuthViewModel
+import com.stt.benchmark.drive.DriveAutoUploadMode
+import com.stt.benchmark.drive.DriveConnectionPhase
+import com.stt.benchmark.drive.GoogleDriveUiState
+import com.stt.benchmark.drive.GoogleDriveViewModel
 import com.stt.benchmark.ui.SttViewModel
 import com.stt.benchmark.ui.common.ArchiveStatusTone
 import com.stt.benchmark.ui.common.SectionLabel
@@ -54,12 +60,14 @@ import java.io.File
 fun SettingsRoute(
     viewModel: SttViewModel,
     codexAuthViewModel: CodexAuthViewModel,
+    googleDriveViewModel: GoogleDriveViewModel,
     onReplayOnboarding: () -> Unit,
     modifier: Modifier = Modifier,
     routeViewModel: SettingsRouteViewModel = viewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val auth by codexAuthViewModel.uiState.collectAsStateWithLifecycle()
+    val driveState by googleDriveViewModel.uiState.collectAsStateWithLifecycle()
     val routeState by routeViewModel.uiState.collectAsStateWithLifecycle()
     val activity = LocalContext.current as? Activity
     val defaultModelPath = File(LocalContext.current.filesDir, "models/ggml-base.bin").absolutePath
@@ -72,10 +80,19 @@ fun SettingsRoute(
             routeViewModel.dismissDialog()
         }
     }
+    val driveAuthorizationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result -> googleDriveViewModel.onAuthorizationResult(result.data) }
+    LaunchedEffect(googleDriveViewModel) {
+        googleDriveViewModel.authorizationRequests.collect { request ->
+            driveAuthorizationLauncher.launch(request)
+        }
+    }
 
     SettingsScreen(
         state = state,
         auth = auth,
+        drive = driveState,
         routeState = routeState,
         availableModels = viewModel.availableModels,
         isDebug = BuildConfig.DEBUG,
@@ -84,6 +101,10 @@ fun SettingsRoute(
         onCancelAuthorization = codexAuthViewModel::cancelAuthorization,
         onProbe = codexAuthViewModel::runParityProbe,
         onLogout = codexAuthViewModel::logout,
+        onDriveConnect = googleDriveViewModel::requestConnection,
+        onDriveDisconnect = googleDriveViewModel::disconnect,
+        onDriveAutoUploadMode = googleDriveViewModel::setAutoUploadMode,
+        canDriveAuthorize = activity != null,
         onReplayOnboarding = onReplayOnboarding,
         onShowModelCatalog = routeViewModel::showModelCatalog,
         onShowModelPath = { routeViewModel.showModelPath(defaultModelPath) },
@@ -102,6 +123,7 @@ fun SettingsRoute(
 fun SettingsScreen(
     state: SttViewModel.UiState,
     auth: CodexAuthUiState,
+    drive: GoogleDriveUiState = GoogleDriveUiState(),
     routeState: SettingsRouteUiState,
     availableModels: List<ModelDownloader.ModelInfo>,
     isDebug: Boolean,
@@ -110,6 +132,10 @@ fun SettingsScreen(
     onCancelAuthorization: () -> Unit,
     onProbe: () -> Unit,
     onLogout: () -> Unit,
+    onDriveConnect: () -> Unit = {},
+    onDriveDisconnect: () -> Unit = {},
+    onDriveAutoUploadMode: (DriveAutoUploadMode) -> Unit = {},
+    canDriveAuthorize: Boolean = true,
     onReplayOnboarding: () -> Unit,
     onShowModelCatalog: () -> Unit,
     onShowModelPath: () -> Unit,
@@ -265,6 +291,72 @@ fun SettingsScreen(
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+
+        SettingsSection("Google Drive") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("개인 Drive", style = MaterialTheme.typography.titleMedium)
+                StatusPill(drive.connectionPhase.label(), tone = drive.connectionPhase.tone())
+            }
+            Text(
+                drive.statusMessage,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (drive.connectionPhase == DriveConnectionPhase.ERROR) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+            Text(
+                "전체 전사와 완료된 요약만 선택해 내 Drive에 저장합니다. 계정 이름·이메일·token은 앱에 표시하거나 저장하지 않습니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            when (drive.connectionPhase) {
+                DriveConnectionPhase.CONNECTING -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                DriveConnectionPhase.CONNECTED -> {
+                    SettingLine("자동 업로드", drive.settings.autoUploadMode.label())
+                    Button(
+                        onClick = { onDriveAutoUploadMode(DriveAutoUploadMode.OFF) },
+                        enabled = drive.settings.autoUploadMode != DriveAutoUploadMode.OFF,
+                        modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
+                    ) { Text("자동 업로드 끄기") }
+                    OutlinedButton(
+                        onClick = { onDriveAutoUploadMode(DriveAutoUploadMode.TRANSCRIPT_ONLY) },
+                        enabled = drive.settings.autoUploadMode != DriveAutoUploadMode.TRANSCRIPT_ONLY,
+                        modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
+                    ) { Text("새 전사만 자동 업로드") }
+                    OutlinedButton(
+                        onClick = { onDriveAutoUploadMode(DriveAutoUploadMode.TRANSCRIPT_AND_SUMMARY) },
+                        enabled = drive.settings.autoUploadMode != DriveAutoUploadMode.TRANSCRIPT_AND_SUMMARY,
+                        modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
+                    ) { Text("새 전사와 완료 요약 자동 업로드") }
+                    OutlinedButton(
+                        onClick = onDriveDisconnect,
+                        modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
+                    ) { Text("Google Drive 연결 해제") }
+                }
+
+                DriveConnectionPhase.DISCONNECTED,
+                DriveConnectionPhase.REAUTH_REQUIRED,
+                DriveConnectionPhase.ERROR,
+                -> Button(
+                    onClick = onDriveConnect,
+                    enabled = canDriveAuthorize,
+                    modifier = Modifier.fillMaxWidth().archiveTouchTarget(),
+                ) {
+                    Text(
+                        if (drive.connectionPhase == DriveConnectionPhase.REAUTH_REQUIRED) {
+                            "Google Drive 다시 연결"
+                        } else {
+                            "Google Drive 연결"
+                        },
+                    )
+                }
             }
         }
 
@@ -547,6 +639,29 @@ private fun CodexAuthPhase.tone(): ArchiveStatusTone = when (this) {
     -> ArchiveStatusTone.ACTIVE
     CodexAuthPhase.ERROR -> ArchiveStatusTone.ERROR
     else -> ArchiveStatusTone.NEUTRAL
+}
+
+private fun DriveConnectionPhase.label(): String = when (this) {
+    DriveConnectionPhase.DISCONNECTED -> "연결 안 됨"
+    DriveConnectionPhase.CONNECTING -> "확인 중"
+    DriveConnectionPhase.CONNECTED -> "연결됨"
+    DriveConnectionPhase.REAUTH_REQUIRED -> "재연결 필요"
+    DriveConnectionPhase.ERROR -> "확인 필요"
+}
+
+private fun DriveConnectionPhase.tone(): ArchiveStatusTone = when (this) {
+    DriveConnectionPhase.CONNECTED -> ArchiveStatusTone.COMPLETE
+    DriveConnectionPhase.CONNECTING -> ArchiveStatusTone.ACTIVE
+    DriveConnectionPhase.REAUTH_REQUIRED,
+    DriveConnectionPhase.ERROR,
+    -> ArchiveStatusTone.ERROR
+    DriveConnectionPhase.DISCONNECTED -> ArchiveStatusTone.NEUTRAL
+}
+
+private fun DriveAutoUploadMode.label(): String = when (this) {
+    DriveAutoUploadMode.OFF -> "꺼짐"
+    DriveAutoUploadMode.TRANSCRIPT_ONLY -> "새 전사만"
+    DriveAutoUploadMode.TRANSCRIPT_AND_SUMMARY -> "새 전사와 요약"
 }
 
 private fun formatBytes(bytes: Long): String = when {

@@ -6,6 +6,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.stt.benchmark.core.DeviceWorkCoordinator
 import com.stt.benchmark.core.DeviceWorkRuntime
+import com.stt.benchmark.data.TranscriptSourceRef
+import com.stt.benchmark.data.TranscriptSourceType
+import com.stt.benchmark.drive.DriveArtifact
+import com.stt.benchmark.drive.DriveUploadScheduler
 import dev.alpine.llm.OAuthAuthenticationState
 import dev.alpine.llm.OAuthException
 import dev.alpine.llm.OAuthFailureKind
@@ -61,6 +65,7 @@ enum class SummaryStage {
 }
 
 class CodexAuthViewModel(application: Application) : AndroidViewModel(application) {
+    private val appContext = application.applicationContext
     private val controller = CodexSummaryAuthController(application)
     private val summaryStore = SummarySessionStore(application)
     private val _uiState = MutableStateFlow(CodexAuthUiState())
@@ -254,9 +259,20 @@ class CodexAuthViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
                 DeviceWorkRuntime.coordinator.beginFinalization(requireNotNull(lease))
-                withContext(Dispatchers.IO) {
+                val savedEntry = withContext(Dispatchers.IO) {
                     summaryStore.saveCompleted(source, summary)
                 }
+                DriveUploadScheduler(appContext).enqueueAutomatic(
+                    source = TranscriptSourceRef(
+                        type = when (savedEntry.source.type) {
+                            SummarySessionStore.SourceType.TRANSCRIPTION_SESSION -> TranscriptSourceType.TRANSCRIPTION_SESSION
+                            SummarySessionStore.SourceType.RECORDING_GROUP -> TranscriptSourceType.RECORDING_GROUP
+                        },
+                        id = savedEntry.source.id,
+                    ),
+                    artifact = DriveArtifact.SUMMARY,
+                    completedAtMs = savedEntry.updatedAtMs,
+                )
                 val entries = withContext(Dispatchers.IO) { summaryStore.listAll() }
                 _summaryUiState.value = SummaryUiState(
                     entries = entries,

@@ -31,7 +31,7 @@
   <img src="https://img.shields.io/badge/whisper.cpp-locked-111111?style=flat-square&logo=cplusplus&logoColor=white" alt="whisper.cpp commit 고정" />
 </p>
 <p>
-  <img src="https://img.shields.io/badge/Tests-299_passing-2E7D32?style=flat-square&logo=junit5&logoColor=white" alt="테스트 299개 통과" />
+  <img src="https://img.shields.io/badge/Tests-308_passing-2E7D32?style=flat-square&logo=junit5&logoColor=white" alt="테스트 308개 통과" />
   <img src="https://img.shields.io/badge/Samsung-Android_16_verified-1428A0?style=flat-square&logo=samsung&logoColor=white" alt="Samsung Android 16 검증" />
   <img src="https://img.shields.io/badge/ELF%2FAPK-16KB_ready-C07148?style=flat-square&logo=androidstudio&logoColor=white" alt="16KB page size 준비" />
   <img src="https://img.shields.io/badge/Release_source-verified-C07148?style=flat-square&logo=androidstudio&logoColor=white" alt="릴리스 소스 검증 완료" />
@@ -42,7 +42,7 @@
 </div>
 
 > [!NOTE]
-> **2026-08-15 소스 기준선:** API 36, 모델 무결성, OAuth state-first, production signing pipeline까지 자동 검증했습니다. Samsung SM-S931N / Android 16 사용자·실장비 검증 기준일은 2026-08-14입니다. 전사와 녹음은 기기 안에서 처리하며, 외부 요약·전사 채팅·공유·TXT 저장은 사용자가 명시적으로 선택할 때만 앱 경계를 넘습니다.
+> **2026-08-20 소스 기준선:** API 36, 모델 무결성, OAuth state-first, production signing pipeline와 개인 Google Drive 직접 업로드 코드를 자동 검증했습니다. Samsung SM-S931N / Android 16 사용자·실장비 검증 기준일은 2026-08-14입니다. 전사와 녹음은 기기 안에서 처리하며, 외부 요약·전사 채팅·공유·TXT 저장·Google Drive 업로드는 사용자가 명시적으로 선택하거나 켠 자동 업로드에만 앱 경계를 넘습니다. 실제 Drive 계정 승인은 별도 실기기 확인이 필요합니다.
 
 > [!NOTE]
 > **배포 정책:** Coreline은 권리 보유자로서 자체 릴리스의 배포 여부를 결정할 수 있습니다. Codex 관련 연동만으로 별도의 “Codex 정식 배포 승인”이 필요한 것은 아닙니다. 다만 배포 시에는 제3자 구성요소의 고지·라이선스와 사용하는 서비스의 적용 약관을 준수해야 합니다. 이 저장소의 개인 학습용 라이선스는 제3자에게 재배포 권한을 부여하지 않습니다.
@@ -58,10 +58,11 @@
 | 🔗 **녹음 그룹 STT** | READY 무결성 재검사, sequence 보장, 완전·부분 완료 구분, child 순차 실행 |
 | 🗃️ **통합 보관함** | 녹음 그룹·단일 전사·원본 오디오 연결, 전체 전사 보기, 결과와 원본의 독립 삭제 |
 | 📄 **외부 추출** | 완료 전사 전체를 UTF-8 TXT로 저장하거나 캐시 파일로 Android Sharesheet에 공유 |
+| ☁️ **개인 Google Drive** | 설정에서 `drive.file` 권한만 승인해 개인 Drive의 `Long STT` 폴더에 전사·완료 요약 TXT를 수동 저장. 자동 업로드는 기본 OFF이며 이후 완료 결과에만 선택적으로 적용 |
 | ✨ **선택적 요약** | 사용자 동의 후 구간 요약·통합·저장 진행률 표시, 목록 완료 상태와 요약 공유 |
 | 💬 **전사 근거 채팅** | 완료 전사의 관련 구간만 보내는 빠른 질문, 사용자 선택 전체 정밀 탐색, 메시지 결합형 근거, 고정 입력창, 검증 근거·주변 문맥 확인 후 즉시 대화 복귀 |
 | 🧭 **완료 결과 이동** | 완료 CTA 영구 복원, 정확한 결과 상세 열기, 완료 알림 딥링크, 삭제·손상 target 안전 폴백 |
-| 🔐 **보안 경계** | OAuth token은 Android Keystore 보호·loopback state 선검증, Whisper 모델은 고정 revision/SHA-256 검증, 완료 target은 type/ID만 저장, 전사 원문 자동 전송 금지 |
+| 🔐 **보안 경계** | OAuth token은 Android Keystore 보호·loopback state 선검증, Drive access token은 메모리 요청 범위에서만 사용, Whisper 모델은 고정 revision/SHA-256 검증, 완료 target은 type/ID만 저장, 전사 원문 자동 전송 금지 |
 | 📊 **벤치마크** | RTF, 처리 시간, 기기 정보, CSV v2 결과와 session identity 기록 |
 
 ## 📱 앱 화면
@@ -167,6 +168,8 @@
                                  │ 빠른/정밀 · 근거 이동│
                                  └─────────────────────┘
 
+완료 전사·완료 요약 ─▶ 사용자 승인 `drive.file` ─▶ WorkManager ─▶ 개인 Google Drive `Long STT`
+
 전사 완료 ─▶ private target(type/ID) ─▶ CTA·완료 알림 ─▶ 정확한 보관함 상세
 ```
 
@@ -245,19 +248,21 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 | 4 | 완료 CTA 또는 완료 알림의 **결과 보기**로 정확한 보관함 상세를 엽니다. |
 | 5 | **전사 전체 보기**, **TXT 저장**, **파일로 공유**를 필요할 때 선택합니다. |
 | 6 | 외부 요약은 안내를 확인하고 동의한 경우에만 시작합니다. |
-| 7 | 완료 상세의 **AI에게 전사 질문**에서 안내에 동의한 뒤 빠른 질문 또는 전체 정밀 탐색을 선택합니다. |
+| 7 | 개인 Drive 저장은 `설정`에서 Google Drive를 연결한 뒤 완료 상세의 **Google Drive에 업로드**를 선택합니다. 자동 업로드는 연결 후 별도로 켜야 하며, 그 시점 이후 완료 결과만 대상입니다. |
+| 8 | 완료 상세의 **AI에게 전사 질문**에서 안내에 동의한 뒤 빠른 질문 또는 전체 정밀 탐색을 선택합니다. |
 
 ## ✅ 검증 상태
 
 | 검증 항목 | 최신 결과 |
 |---|---|
-| 앱 JVM / Robolectric / Compose | **256 passed / 0 failed / 0 skipped** · 하단 destination 선택, 모델 revision·SHA-256·host 정책과 완료 알림·TXT·공유 핵심 계약 포함 |
+| 앱 JVM / Robolectric / Compose | **264 passed / 0 failed / 0 skipped** · Drive 상태 저장·캐시 TXT·resumable 요청 계약을 포함해 완료 알림·TXT·공유 핵심 계약 확인 |
 | OAuth 모듈 | **44 passed / 0 failed / 0 skipped** · state 누락/불일치 loopback callback이 정상 로그인을 선점하지 않는 회귀 포함 |
 | Android lint / 산출물 | API 36 Release lint **0 errors / 37 warnings**, Release APK/AAB, 16KB alignment, Release surface gate 통과 |
 | 배포 서명 파이프라인 | keyless gate fail-closed, 일회성 외부 JKS로 signed AAB·`jarsigner`·SHA-256 provenance 종단간 검증 후 key 삭제 |
 | Samsung P0 | 데이터 보존 설치, 완료 CTA·알림 딥링크·cold start 복원 통과 |
 | Samsung P1 자동 smoke | 격리 deviceTest 8건 통과·실마이크/AICore 5건 opt-in 건너뜀, OAuth Keystore 2건 통과 |
 | 녹음 입력 전환 | 일반 입력 분류만 actor로 직렬화, 일시적 미확정 경로 확인, 변경 시 기존 청크 확정→새 청크 재시작, 200% 글자 안내 자동 검증 |
+| Google Drive 직접 업로드 | `drive.file` 단일 scope, 원문·token·경로 없는 job metadata, resumable 요청·신뢰할 수 없는 session URL 거부, 기본 OFF 자동 업로드 자동 검증. 실제 Google 계정 승인·외부 업로드는 미실행 |
 | 완료 상세 안정성 | 연속 클릭·가로/세로 회전·닫기·재진입 시 중복 dialog 없음 |
 | 공유 안정성 | 요약/TXT chooser 취소, handler 없음·보안 예외·provider/쓰기 실패 처리 통과 |
 | 장시간 가져오기 | bounded stream copy, `.part → final`, 실패 partial 정리 자동 검증 |
